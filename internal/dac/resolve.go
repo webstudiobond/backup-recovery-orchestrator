@@ -47,18 +47,18 @@ func (a *Applier) resolvePrincipal(token, stackName string, stackID uint32, isUs
 	case "root":
 		return 0, nil
 	case "stack":
-		if uint64(stackID) > maxIntLimit() {
+		if uint64(stackID) > math.MaxInt || uint64(stackID) > maxIntLimit() {
 			return 0, fmt.Errorf("stack id %d exceeds int range", stackID)
 		}
 		return int(stackID), nil
 	case stackName:
-		if stackID > 0 && uint64(stackID) <= maxIntLimit() {
+		if stackID > 0 && uint64(stackID) <= math.MaxInt && uint64(stackID) <= maxIntLimit() {
 			return int(stackID), nil
 		}
 	}
 
 	if numeric, err := strconv.ParseUint(token, 10, 32); err == nil {
-		if numeric > maxIntLimit() {
+		if numeric > math.MaxInt || numeric > maxIntLimit() {
 			return 0, fmt.Errorf("numeric id %d exceeds int range", numeric)
 		}
 		return int(numeric), nil

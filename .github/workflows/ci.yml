@@ -35,6 +35,23 @@ jobs:
       - name: Build check
         run: go build -v ./...
 
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Lint shell scripts
+        run: |
+          shellcheck --enable=all -x scripts/*.sh tests/*.sh
+          shfmt -d -s -i 2 scripts/*.sh tests/*.sh
+
+      - uses: TypedDevs/bashunit@97a6b664a59edcb1ade450c3a6400728f3481115 # 0.53.0
+
+      - name: Run unit tests
+        run: bashunit tests/
+
   golangci:
     name: golangci-lint
     runs-on: ubuntu-latest

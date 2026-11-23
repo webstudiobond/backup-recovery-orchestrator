@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build and Release
+  build:
+    name: Build and Package
     runs-on: ubuntu-latest
 
     steps:
@@ -21,35 +21,156 @@ jobs:
         uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: "go.mod"
+          cache: true
 
-
-      - name: Build and Archive
+      - name: Install nfpm
         run: |
-          mkdir -p release_assets
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 
-          # List of OS/ARCH targets
-          TARGETS="linux/amd64 linux/arm64"
+      - name: Build and Package
+        run: |
+          mkdir -p release_archives release_packages
+          VERSION="${GITHUB_REF_NAME#v}"
 
-          for target in $TARGETS; do
-            GOOS=${target%/*}
-            GOARCH=${target#*/}
-            echo "Building for $GOOS/$GOARCH..."
+          for arch in amd64 arm64; do
+            echo "Building binary for linux/${arch}..."
+            mkdir -p "build_linux_${arch}"
+            cp LICENSE "build_linux_${arch}/"
+            cp README.md "build_linux_${arch}/"
 
-            mkdir -p "build_${GOOS}_${GOARCH}"
-            cp LICENSE "build_${GOOS}_${GOARCH}/"
-            cp README.md "build_${GOOS}_${GOARCH}/"
+            CGO_ENABLED=0 GOOS=linux GOARCH=${arch} go build -trimpath \
+              -ldflags "-s -w -X main.AppVersion=${{ github.ref_name }}" \
+              -o "build_linux_${arch}/bro" ./cmd/bro
 
-            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags "-s -w -X main.AppVersion=${{ github.ref_name }}" -o "build_${GOOS}_${GOARCH}/bro" ./cmd/bro
-            cd "build_${GOOS}_${GOARCH}"
-            tar -czvf "../release_assets/backup-recovery-orchestrator-${GOOS}-${GOARCH}.tar.gz" ./*
+            cd "build_linux_${arch}"
+            tar -czvf "../release_archives/backup-recovery-orchestrator-linux-${arch}.tar.gz" ./*
             cd ..
+
+            # Stage binary for nfpm packaging
+            cp "build_linux_${arch}/bro" ./bro
+            ARCH=${arch} VERSION=${VERSION} nfpm package --packager deb --target release_packages/
+            rm -f ./bro
           done
+
+      - name: Upload Archive Artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archive-assets
+          path: release_archives/*
+
+      - name: Upload Package Artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-assets
+          path: release_packages/*.deb
+
+  sign:
+    name: Sign Packages and Repositories
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download Package Artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package-assets
+          path: release_packages
+
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: gh-pages-branch
+
+      - name: Generate and Sign Repositories
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/workspace \
+            -e GPG_PRIVATE_KEY="${{ secrets.GPG_PRIVATE_KEY }}" \
+            -e GPG_PASSPHRASE="${{ secrets.GPG_PASSPHRASE }}" \
+            debian:trixie-slim sh -c '
+              set -e
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends dpkg-dev apt-utils gnupg gzip
+              bash /workspace/scripts/generate-repo.sh /workspace/release_packages /workspace/signed_repo /workspace/gh-pages-branch
+            '
+
+      - name: Upload Signed Repositories
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-repositories
+          path: signed_repo/
+
+      - name: Stage Verified Packages
+        run: |
+          mkdir -p verified_packages
+          find signed_repo/deb/pool/main -type f -name "*.deb" -exec cp {} verified_packages/ \;
+
+      - name: Upload Verified Packages Artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verified-packages
+          path: verified_packages/*
+
+  release:
+    name: Publish Release
+    needs: [build, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Archive Artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archive-assets
+          path: final_release_assets
+
+      - name: Download Verified Packages Artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-packages
+          path: final_release_assets
 
       - name: Publish Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: release_assets/*
+          files: final_release_assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  pages:
+    name: Deploy to GitHub Pages
+    needs: [sign, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: gh-pages
+          path: gh-pages-branch
+
+      - name: Download Signed Repositories
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed-repositories
+          path: signed_assets
+
+      - name: Update Repository Files
+        run: |
+          mkdir -p gh-pages-branch/deb
+          rm -rf gh-pages-branch/deb/*
+          cp -r signed_assets/deb/* gh-pages-branch/deb/
+          cd gh-pages-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add --all deb/
+          git commit -m "chore: update APT repository for release ${{ github.ref_name }}" || echo "No changes to commit"
+          git push

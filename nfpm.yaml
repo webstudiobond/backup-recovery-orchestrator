@@ -1,0 +1,182 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+name: "bro"
+arch: "${ARCH}"
+platform: "linux"
+version: "${VERSION}"
+section: "admin"
+priority: "optional"
+maintainer: "underhax <https://github.com/underhax>"
+description: "Point-in-time backup and disaster recovery orchestrator for Docker Compose"
+homepage: "https://github.com/webstudiobond/backup-recovery-orchestrator"
+license: "MIT"
+
+deb:
+  predepends:
+    - lvm2
+
+depends:
+  - systemd
+  - lvm2
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-compose-plugin
+  - tar
+  - zstd
+  - mount
+  - passwd
+
+contents:
+  - src: ./bro
+    dst: /usr/bin/bro
+    file_info:
+      mode: 0500
+
+  - dst: /etc/bro
+    type: dir
+    file_info:
+      mode: 0700
+
+  - dst: /etc/bro/conf.d
+    type: dir
+    file_info:
+      mode: 0700
+
+  - dst: /etc/bro/profiles
+    type: dir
+    file_info:
+      mode: 0700
+
+  - src: ./etc/systemd/system/bro-full.service
+    dst: /etc/systemd/system/bro-full.service
+    type: "config|noreplace"
+    file_info:
+      mode: 0400
+
+  - src: ./etc/systemd/system/bro-full.timer
+    dst: /etc/systemd/system/bro-full.timer
+    type: "config|noreplace"
+    file_info:
+      mode: 0400
+
+  - src: ./etc/modules-load.d/lvm-snapshot.conf
+    dst: /etc/modules-load.d/lvm-snapshot.conf
+    type: "config|noreplace"
+    file_info:
+      mode: 0400
+
+  - dst: /usr/share/doc/bro/examples
+    type: dir
+    file_info:
+      mode: 0700
+
+  - dst: /usr/share/doc/bro/examples/etc
+    type: dir
+    file_info:
+      mode: 0700
+
+  - dst: /usr/share/doc/bro/examples/etc/bro
+    type: dir
+    file_info:
+      mode: 0700
+
+  - dst: /usr/share/doc/bro/examples/etc/bro/conf.d
+    type: dir
+    file_info:
+      mode: 0700
+
+  - dst: /usr/share/doc/bro/examples/etc/bro/profiles
+    type: dir
+    file_info:
+      mode: 0700
+
+  - dst: /usr/share/doc/bro/examples/etc/systemd
+    type: dir
+    file_info:
+      mode: 0700
+
+  - dst: /usr/share/doc/bro/examples/etc/systemd/system
+    type: dir
+    file_info:
+      mode: 0700
+
+  - src: ./examples/etc/bro/config.json
+    dst: /usr/share/doc/bro/examples/etc/bro/config.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/profiles/wordpress.json
+    dst: /usr/share/doc/bro/examples/etc/bro/profiles/wordpress.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/conf.d/angie.json
+    dst: /usr/share/doc/bro/examples/etc/bro/conf.d/angie.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/conf.d/authelia.json
+    dst: /usr/share/doc/bro/examples/etc/bro/conf.d/authelia.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/conf.d/dns.json
+    dst: /usr/share/doc/bro/examples/etc/bro/conf.d/dns.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/conf.d/matrix.json
+    dst: /usr/share/doc/bro/examples/etc/bro/conf.d/matrix.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/conf.d/mihomo.json
+    dst: /usr/share/doc/bro/examples/etc/bro/conf.d/mihomo.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/conf.d/reconsr.json
+    dst: /usr/share/doc/bro/examples/etc/bro/conf.d/reconsr.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/conf.d/site1.json
+    dst: /usr/share/doc/bro/examples/etc/bro/conf.d/site1.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/conf.d/speedybench.json
+    dst: /usr/share/doc/bro/examples/etc/bro/conf.d/speedybench.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/bro/conf.d/stalwart.json
+    dst: /usr/share/doc/bro/examples/etc/bro/conf.d/stalwart.json
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/systemd/system/bro-full.service
+    dst: /usr/share/doc/bro/examples/etc/systemd/system/bro-full.service
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/systemd/system/bro-full.timer
+    dst: /usr/share/doc/bro/examples/etc/systemd/system/bro-full.timer
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/systemd/system/mnt-cloud-primary.automount
+    dst: /usr/share/doc/bro/examples/etc/systemd/system/mnt-cloud-primary.automount
+    file_info:
+      mode: 0400
+
+  - src: ./examples/etc/systemd/system/mnt-cloud-primary.mount
+    dst: /usr/share/doc/bro/examples/etc/systemd/system/mnt-cloud-primary.mount
+    file_info:
+      mode: 0400
+
+scripts:
+  preinstall: ./scripts/preinstall.sh
+  postinstall: ./scripts/postinstall.sh
+  preremove: ./scripts/preremove.sh
+  postremove: ./scripts/postremove.sh

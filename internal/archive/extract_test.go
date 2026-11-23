@@ -641,3 +641,63 @@ func TestSanitizeTarMemberPath(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanArchiveMember(t *testing.T) {
+	t.Parallel()
+
+	dst := filepath.Join(t.TempDir(), "target_dst")
+
+	tests := []struct {
+		name       string
+		raw        string
+		wantRel    string
+		wantTarget string
+		wantErr    bool
+	}{
+		{
+			name:    "empty_raw_string",
+			raw:     "",
+			wantErr: true,
+		},
+		{
+			name:    "leading_slash_raw_string",
+			raw:     "/etc/config",
+			wantErr: true,
+		},
+		{
+			name:    "null_byte_in_raw_string",
+			raw:     "file\x00name",
+			wantErr: true,
+		},
+		{
+			name:    "current_dir_dot",
+			raw:     ".",
+			wantErr: true,
+		},
+		{
+			name:    "parent_traversal",
+			raw:     "../traverse.txt",
+			wantErr: true,
+		},
+		{
+			name:       "valid_member_path",
+			raw:        "valid/path/app.txt",
+			wantRel:    filepath.FromSlash("valid/path/app.txt"),
+			wantTarget: filepath.Join(dst, filepath.FromSlash("valid/path/app.txt")),
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			rel, target, err := cleanArchiveMember(dst, tt.raw)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("cleanArchiveMember(%q) error = %v, wantErr = %v", tt.raw, err, tt.wantErr)
+			}
+			if !tt.wantErr && (rel != tt.wantRel || target != tt.wantTarget) {
+				t.Fatalf("cleanArchiveMember(%q) = (%q, %q), want (%q, %q)", tt.raw, rel, target, tt.wantRel, tt.wantTarget)
+			}
+		})
+	}
+}

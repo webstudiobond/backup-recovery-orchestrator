@@ -42,24 +42,50 @@ Storage & DAC
 
 ## Installation
 
-Download the latest release archive for your target architecture (`amd64` or `arm64`) from [GitHub Releases](https://github.com/webstudiobond/backup-recovery-orchestrator/releases), extract the archive, and place the `bro` binary into `/usr/local/bin/bro`.
+### Package Repository (Recommended)
 
-Assign ownership to `root:root` and restrict execution permissions:
+Add the official repository to receive seamless updates via standard system package managers.
+
+**Debian / Ubuntu:**
 
 ```bash
-chown root:root /usr/local/bin/bro
-chmod 0500 /usr/local/bin/bro
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://webstudiobond.github.io/backup-recovery-orchestrator/webstudiobond.asc | sudo tee /etc/apt/keyrings/webstudiobond.asc > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/webstudiobond.asc] https://webstudiobond.github.io/backup-recovery-orchestrator/deb stable main" | sudo tee /etc/apt/sources.list.d/bro.list
+sudo apt update
+sudo apt install bro
+```
+
+### Automated Script
+
+Run the automated installer script to detect your platform architecture, verify SHA256 checksums from GitHub Releases, and install the package:
+
+```bash
+curl -fSsL https://raw.githubusercontent.com/webstudiobond/backup-recovery-orchestrator/main/scripts/install.sh | sudo bash
+```
+
+### Manual Download & Verification
+
+Download the latest package from [Releases](https://github.com/webstudiobond/backup-recovery-orchestrator/releases), verify its SHA256 digest from the GitHub API, and install:
+
+```bash
+curl -fSsLO https://github.com/webstudiobond/backup-recovery-orchestrator/releases/latest/download/bro_<version>_<arch>.deb
+EXPECTED_HASH=$(curl -fSs https://api.github.com/repos/webstudiobond/backup-recovery-orchestrator/releases/latest | jq -r '.assets[] | select(.name == "bro_<version>_<arch>.deb") | .digest' | sed 's/sha256://')
+echo "${EXPECTED_HASH}  bro_<version>_<arch>.deb" | sha256sum -c -
+sudo dpkg -i bro_<version>_<arch>.deb
+```
+
+For manual binary installation without the package manager, download the release archive (`.tar.gz`), extract the binary, and place it into `/usr/bin/bro`:
+
+```bash
+chown root:root /usr/bin/bro
+chmod 0500 /usr/bin/bro
+install -d -m 0700 /etc/bro /etc/bro/conf.d /etc/bro/profiles
 ```
 
 ### Configuration Setup
 
-Create the configuration directory hierarchy:
-
-```bash
-install -d -m 0700 /etc/bro /etc/bro/conf.d /etc/bro/profiles
-```
-
-Reference templates in `examples/etc/bro/` illustrate the configuration structure, syntax, and inheritance patterns:
+Reference templates in `/usr/share/doc/bro/examples/` (or repository `examples/`) illustrate the configuration structure, syntax, and inheritance patterns:
 
 ```text
 /etc/bro/
@@ -72,11 +98,18 @@ Reference templates in `examples/etc/bro/` illustrate the configuration structur
 
 #### Global Configuration
 
-`/etc/bro/config.json` is the primary orchestrator configuration file. It defines host-wide operational parameters, including the backup storage root, LVM volume and snapshot settings, Angie reverse proxy paths, retention policies, and replication destinations. Adapt the reference template [`config.json`](examples/etc/bro/config.json) to match your host layout.
+`/etc/bro/config.json` is the primary orchestrator configuration file. It defines host-wide operational parameters, including the backup storage root, LVM volume and snapshot settings, Angie reverse proxy paths, retention policies, and replication destinations.
+
+Copy the template from examples and customize it for your host:
+
+```bash
+cp /usr/share/doc/bro/examples/etc/bro/config.json /etc/bro/config.json
+chmod 0400 /etc/bro/config.json
+```
 
 #### Profiles & Stack Declarations
 
-Profiles under `profiles/` are optional and exist to eliminate duplication when running multiple instances of the same service type (for example, hosting multiple WordPress sites on one server). When multiple stacks share identical file exclusion lists, database dump mechanics, or DAC permissions, extract that common logic into a profile. The repository provides [`wordpress.json`](examples/etc/bro/profiles/wordpress.json) as a reference example demonstrating shared rules for WordPress instances. If your host runs distinct, non-repeating workloads, you do not need to create any profiles.
+Profiles under `profiles/` are optional and exist to eliminate duplication when running multiple instances of the same service type (for example, hosting multiple WordPress sites on one server). When multiple stacks share identical file exclusion lists, database dump mechanics, or DAC permissions, extract that common logic into a profile. The repository and package provide [`wordpress.json`](examples/etc/bro/profiles/wordpress.json) under `/usr/share/doc/bro/examples/etc/bro/profiles/wordpress.json` as a reference example demonstrating shared rules for WordPress instances. If your host runs distinct, non-repeating workloads, you do not need to create any profiles.
 
 Create a JSON declaration under `conf.d/` for each Docker Compose stack you want `bro` to manage. Stacks can inherit a profile using `"extends": "<profile_name>"`—for example, [`site1.json`](examples/etc/bro/conf.d/site1.json) extends `wordpress`, inheriting all database dump rules and file exclusions while declaring only site-specific attributes (the host user UID/GID and domain mappings). Stacks without shared logic define their complete specification directly (reference templates: [`angie.json`](examples/etc/bro/conf.d/angie.json), [`stalwart.json`](examples/etc/bro/conf.d/stalwart.json)).
 
@@ -84,12 +117,12 @@ Set strict ownership and permissions:
 
 ```bash
 chown -R root:root /etc/bro
-find /etc/bro -type f -name "*.json" -exec chmod 0600 {} +
+find /etc/bro -type f -name "*.json" -exec chmod 0400 {} +
 ```
 
 ### Systemd Service & Timer Setup
 
-Automated execution requires the `bro-full.service` and `bro-full.timer` units. The `examples/etc/systemd/system/` directory also provides reference mount units demonstrating how to integrate on-demand storage destinations:
+Automated execution requires the `bro-full.service` and `bro-full.timer` units (installed automatically by the Debian package). The `/usr/share/doc/bro/examples/etc/systemd/system/` directory also provides reference mount units demonstrating how to integrate on-demand storage destinations:
 
 ```text
 /etc/systemd/system/
@@ -104,12 +137,12 @@ Automated execution requires the `bro-full.service` and `bro-full.timer` units. 
 The `bro-full.service` unit runs a complete backup cycle (`bro backup --all`) across all enabled stacks, creates temporary LVM snapshots, streams databases, and replicates archives to configured storage targets. It runs as a low-priority oneshot background task to avoid impacting live container workloads. Reference template: [`bro-full.service`](examples/etc/systemd/system/bro-full.service).
 
 1) Host configuration for kernel modules:
-The unit enforces kernel sandboxing (`ProtectKernelModules=yes`), dropping `CAP_SYS_MODULE` and filtering `@module` system calls. Because `bro` cannot dynamically load kernel modules inside this restricted sandbox, the `dm_snapshot` module required for LVM snapshot operations must be loaded by the host operating system at boot:
+The unit enforces kernel sandboxing (`ProtectKernelModules=yes`), dropping `CAP_SYS_MODULE` and filtering `@module` system calls. Because `bro` cannot dynamically load kernel modules inside this restricted sandbox, the `dm_snapshot` module required for LVM snapshot operations must be loaded by the host operating system at boot (pre-configured automatically when installing via package):
 
 ```bash
 printf 'dm_snapshot\n' > /etc/modules-load.d/lvm-snapshot.conf
 chown root:root /etc/modules-load.d/lvm-snapshot.conf
-chmod 0644 /etc/modules-load.d/lvm-snapshot.conf
+chmod 0400 /etc/modules-load.d/lvm-snapshot.conf
 systemctl restart systemd-modules-load.service
 ```
 
@@ -148,11 +181,11 @@ If offsite replication destinations rely on systemd-managed FUSE or network file
 
 #### Unit Activation
 
-Set ownership and permissions on the deployed units:
+Set ownership and permissions on the deployed units (if installing manually):
 
 ```bash
 chown root:root /etc/systemd/system/bro-full.service /etc/systemd/system/bro-full.timer
-chmod 0644 /etc/systemd/system/bro-full.service /etc/systemd/system/bro-full.timer
+chmod 0400 /etc/systemd/system/bro-full.service /etc/systemd/system/bro-full.timer
 ```
 
 Reload the systemd daemon and activate the timer:

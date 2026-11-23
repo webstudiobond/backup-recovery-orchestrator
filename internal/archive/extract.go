@@ -67,18 +67,18 @@ func extractTarMembers(ctx context.Context, r io.Reader, cleanDst string, root *
 			return fmt.Errorf("unsupported non-regular tar entry %q", hdr.Name)
 		}
 
-		cleanMember, pathErr := sanitizeTarMemberPath(hdr.Name)
+		relOS, target, pathErr := cleanArchiveMember(cleanDst, hdr.Name)
 		if pathErr != nil {
 			return pathErr
 		}
 
-		relOS := filepath.FromSlash(cleanMember)
-		if mkErr := os.MkdirAll(filepath.Join(cleanDst, filepath.Dir(relOS)), 0o750); mkErr != nil {
-			return fmt.Errorf("create member directory for %q: %w", cleanMember, mkErr)
+		targetDir := filepath.Dir(target)
+		if mkErr := os.MkdirAll(targetDir, 0o750); mkErr != nil {
+			return fmt.Errorf("create member directory for %q: %w", relOS, mkErr)
 		}
 
 		if writeErr := writeRootFile(root, relOS, tr, hdr.FileInfo().Mode().Perm()); writeErr != nil {
-			return fmt.Errorf("extract %q: %w", cleanMember, writeErr)
+			return fmt.Errorf("extract %q: %w", relOS, writeErr)
 		}
 	}
 }
@@ -164,9 +164,24 @@ func clearDirectoryContents(dir string) error {
 	return nil
 }
 
+func cleanArchiveMember(cleanDst, raw string) (relOS, targetPath string, err error) {
+	if raw == "" || strings.HasPrefix(raw, "/") || strings.Contains(raw, "\x00") {
+		return "", "", fmt.Errorf("invalid archive member path %q", raw)
+	}
+	cleanRel := filepath.Clean(filepath.FromSlash(raw))
+	target := filepath.Join(cleanDst, cleanRel)
+	if !strings.HasPrefix(target, cleanDst+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("unsafe archive member path %q", raw)
+	}
+	return cleanRel, target, nil
+}
+
 func sanitizeTarMemberPath(raw string) (string, error) {
 	if raw == "" || strings.HasPrefix(raw, "/") || strings.Contains(raw, "\x00") {
 		return "", fmt.Errorf("invalid archive member path %q", raw)
+	}
+	if !filepath.IsLocal(filepath.FromSlash(raw)) {
+		return "", fmt.Errorf("unsafe archive member path %q", raw)
 	}
 	cleaned := path.Clean(raw)
 	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
