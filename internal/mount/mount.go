@@ -28,12 +28,16 @@ type Verifier struct {
 	PollInterval time.Duration
 }
 
+func toInt64[T ~int | ~int32 | ~int64 | ~uint | ~uint32 | ~uint64](v T) int64 {
+	return int64(v)
+}
+
 func defaultStatFSType(path string) (int64, error) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(filepath.Clean(path), &stat); err != nil {
 		return 0, fmt.Errorf("statfs %q: %w", path, err)
 	}
-	return int64(stat.Type), nil
+	return toInt64(stat.Type), nil
 }
 
 // NewVerifier builds a destination Verifier using OSRunner and syscall.Statfs.

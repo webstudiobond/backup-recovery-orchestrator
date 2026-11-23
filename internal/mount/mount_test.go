@@ -233,6 +233,10 @@ func TestEnsureReadyValidation(t *testing.T) {
 func TestDefaultStatFSType(t *testing.T) {
 	t.Parallel()
 
+	if got := toInt64(uint32(42)); got != 42 {
+		t.Fatalf("expected 42, got %d", got)
+	}
+
 	dir := t.TempDir()
 	if _, err := defaultStatFSType(dir); err != nil {
 		t.Fatalf("unexpected statfs error: %v", err)
