@@ -1,0 +1,42 @@
+{
+  "enabled": true,
+  "user": { "name": "angie", "uid": 1001, "gid": 1001 },
+  "files": {
+    "no_wildcards_match_slash": true,
+    "excludes": [
+      "./data/logs/domains/*",
+      "./data/logs/*.log*",
+      "./data/cache/*",
+      "*.tmp"
+    ]
+  },
+  "dac": [
+    { "path": ".", "owner": "root:stack", "dir_mode": "0750" },
+    { "path": "docker-compose.yaml", "owner": "root:root", "file_mode": "0600" },
+    { "path": ".env", "owner": "root:root", "file_mode": "0600", "optional": true },
+    { "path": "data", "owner": "root:stack", "dir_mode": "0750" },
+    { "path": "data/angie.conf", "owner": "root:stack", "file_mode": "0440" },
+    { "path": "data/mime.types", "owner": "root:stack", "file_mode": "0440" },
+    { "path": "data/modules.conf", "owner": "root:stack", "file_mode": "0440" },
+    { "path": "data/conf.d", "owner": "root:stack", "dir_mode": "0750", "file_mode": "0440", "recursive": true },
+    { "path": "data/conf.d/cloudflare-ips.inc", "owner": "root:stack", "file_mode": "0640", "optional": true },
+    { "path": "data/html", "owner": "root:stack", "dir_mode": "0750", "file_mode": "0440", "recursive": true },
+    { "path": "data/cache", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true, "optional": true },
+    { "path": "data/certs", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true },
+    { "path": "data/logs", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true }
+  ],
+  "host_files": [
+    { "path": "/usr/local/bin/angie", "owner": "root:root", "file_mode": "0500", "optional": true },
+    { "path": "/usr/local/bin/update-cf-ips.sh", "owner": "root:root", "file_mode": "0500", "optional": true },
+    { "path": "/etc/cron.d/update-cf-ips", "owner": "root:root", "file_mode": "0400", "optional": true },
+    { "path": "/etc/logrotate.d/angie", "owner": "root:root", "file_mode": "0400", "optional": true }
+  ],
+  "restore_steps": [
+    { "action": "compose_down" },
+    { "action": "extract_files" },
+    { "action": "apply_dac" },
+    { "action": "extract_host_files" },
+    { "action": "compose_up" },
+    { "action": "wait_healthy" }
+  ]
+}

@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: "go.mod"
+
+
+      - name: Build and Archive
+        run: |
+          mkdir -p release_assets
+
+          # List of OS/ARCH targets
+          TARGETS="linux/amd64 linux/arm64"
+
+          for target in $TARGETS; do
+            GOOS=${target%/*}
+            GOARCH=${target#*/}
+            echo "Building for $GOOS/$GOARCH..."
+
+            mkdir -p "build_${GOOS}_${GOARCH}"
+            cp LICENSE "build_${GOOS}_${GOARCH}/"
+            cp README.md "build_${GOOS}_${GOARCH}/"
+
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags "-s -w -X main.AppVersion=${{ github.ref_name }}" -o "build_${GOOS}_${GOARCH}/bro" ./cmd/bro
+            cd "build_${GOOS}_${GOARCH}"
+            tar -czvf "../release_assets/backup-recovery-orchestrator-${GOOS}-${GOARCH}.tar.gz" ./*
+            cd ..
+          done
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

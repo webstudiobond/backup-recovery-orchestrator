@@ -1,0 +1,51 @@
+{
+  "backup_root": "/backups",
+  "timezone": "local",
+  "lock_file": "/run/lock/bro.lock",
+  "zstd_level": 9,
+  "min_free_gb": 15,
+  "lvm": {
+    "vg_name": "ubuntu-vg",
+    "lv_name": "lv_home",
+    "snapshot_name": "home_snap",
+    "snapshot_size": "10G",
+    "mount_point": "/mnt/home_snap"
+  },
+  "angie": {
+    "compose_file": "/home/angie/docker-compose.yaml",
+    "service_name": "angie",
+    "certs_dir": "/home/angie/data/certs",
+    "domains_dir": "/home/angie/data/conf.d/domains",
+    "stream_dir": "/home/angie/data/conf.d/stream"
+  },
+  "retention": {
+    "local_count": 3,
+    "remote_count": 7
+  },
+  "destinations": [
+    {
+      "name": "cloud-primary",
+      "type": "fuse",
+      "mount_point": "/mnt/cloud-primary",
+      "backup_dir": "/mnt/cloud-primary/backups",
+      "systemd_unit": "mnt-cloud-primary.mount",
+      "wait_timeout_sec": 30,
+      "remote_count": 14,
+      "rclone_cleanup_remote": "cloud-primary-enc"
+    },
+    {
+      "name": "offsite-s3",
+      "type": "rclone",
+      "remote": "s3crypt:bro-backups",
+      "rclone_config": "/etc/rclone/rclone.conf",
+      "remote_count": 30
+    },
+    {
+      "name": "cold-disk",
+      "type": "mount",
+      "mount_point": "/mnt/usb-backup",
+      "backup_dir": "/mnt/usb-backup/backups",
+      "remote_count": 7
+    }
+  ]
+}

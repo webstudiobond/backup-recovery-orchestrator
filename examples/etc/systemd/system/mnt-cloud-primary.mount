@@ -1,0 +1,17 @@
+[Unit]
+Description=Mount for Cloud Primary Storage via Rclone
+DefaultDependencies=no
+After=local-fs.target network-online.target systemd-networkd-wait-online.service
+Wants=network-online.target systemd-networkd-wait-online.service
+Conflicts=umount.target
+Before=remote-fs.target umount.target
+
+[Mount]
+Type=rclone
+What=cloud-primary-enc:backup
+Where=/mnt/cloud-primary
+Options=rw,_netdev,nodev,nosuid,noexec,default-permissions,config=/root/.config/rclone/rclone.conf,uid=0,gid=0,umask=077,dir-perms=0700,file-perms=0600,vfs-cache-mode=full,cache-dir=/var/cache/rclone/cloud-primary,vfs-cache-max-age=1h,vfs-cache-max-size=10G,vfs-read-chunk-size=128M,vfs-read-chunk-size-limit=1G
+TimeoutSec=120
+
+[Install]
+WantedBy=multi-user.target

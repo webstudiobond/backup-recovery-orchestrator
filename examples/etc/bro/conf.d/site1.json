@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "extends": "wordpress",
+  "user": { "name": "site1", "uid": 1008, "gid": 1008 },
+  "angie": {
+    "acme_names": ["site1"],
+    "domain_confs": ["example.com.conf"]
+  }
+}

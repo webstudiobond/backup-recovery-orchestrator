@@ -1,0 +1,25 @@
+{
+  "enabled": true,
+  "user": { "name": "speedybench", "uid": 1018, "gid": 1018 },
+  "files": {
+    "excludes": [
+      "*.tmp"
+    ]
+  },
+  "dac": [
+    { "path": ".", "owner": "root:stack", "dir_mode": "0750" },
+    { "path": "docker-compose.yaml", "owner": "root:root", "file_mode": "0600" }
+  ],
+  "angie": {
+    "acme_names": ["speedybench"],
+    "domain_confs": ["speedybench.example.com.conf"]
+  },
+  "restore_steps": [
+    { "action": "compose_down" },
+    { "action": "extract_files" },
+    { "action": "apply_dac" },
+    { "action": "deploy_angie" },
+    { "action": "compose_up" },
+    { "action": "wait_healthy" }
+  ]
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Automount for Cloud Primary Storage via Rclone
+DefaultDependencies=no
+After=local-fs.target
+Conflicts=umount.target
+Before=remote-fs.target umount.target
+
+[Automount]
+Where=/mnt/cloud-primary
+DirectoryMode=0700
+TimeoutIdleSec=600
+
+[Install]
+WantedBy=multi-user.target

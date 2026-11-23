@@ -1,0 +1,50 @@
+{
+  "enabled": true,
+  "user": { "name": "stalwart", "uid": 1002, "gid": 1002 },
+  "files": {
+    "no_wildcards_match_slash": true,
+    "excludes": [
+      "./postgres/*",
+      "./logs/*",
+      "*.tmp"
+    ]
+  },
+  "dac": [
+    { "path": ".", "owner": "root:stack", "dir_mode": "0750" },
+    { "path": "docker-compose.yaml", "owner": "root:root", "file_mode": "0600" },
+    { "path": ".env", "owner": "root:root", "file_mode": "0600" },
+    { "path": "config", "owner": "root:stack", "dir_mode": "0750", "file_mode": "0440", "recursive": true },
+    { "path": "secrets", "owner": "root:stack", "dir_mode": "0750", "file_mode": "0440", "recursive": true },
+    { "path": "data", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true },
+    { "path": "postgres", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true },
+    { "path": "logs", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true }
+  ],
+  "databases": [
+    {
+      "driver": "postgres",
+      "service": "postgres",
+      "host": "/var/run/postgresql",
+      "secrets": {
+        "source": "container",
+        "user_file": "/run/secrets/db_user",
+        "db_file": "/run/secrets/db_name",
+        "password_file": "/run/secrets/db_password"
+      }
+    }
+  ],
+  "angie": {
+    "acme_names": ["stalwart", "autoconfig", "autodiscover", "mta-sts"],
+    "domain_confs": ["stalwart.conf", "autoconfig.conf", "autodiscover.conf", "mta-sts.conf"]
+  },
+  "restore_steps": [
+    { "action": "compose_down" },
+    { "action": "extract_files" },
+    { "action": "apply_dac" },
+    { "action": "deploy_angie" },
+    { "action": "compose_up", "services": ["postgres"] },
+    { "action": "wait_healthy", "services": ["postgres"] },
+    { "action": "db_import" },
+    { "action": "compose_up" },
+    { "action": "wait_healthy" }
+  ]
+}
