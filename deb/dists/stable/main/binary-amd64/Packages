@@ -1,0 +1,17 @@
+Package: bro
+Version: 0.1.0
+Architecture: amd64
+Maintainer: underhax <https://github.com/underhax>
+Installed-Size: 3865
+Pre-Depends: lvm2
+Depends: systemd, lvm2, docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin, tar, zstd, mount, passwd
+Filename: pool/main/bro_0.1.0_amd64.deb
+Size: 1707246
+MD5sum: d5a5d5cf5a035b353680e53d6619ae48
+SHA1: a453e7d9759d9dd862933c2170792be3cc7d4013
+SHA256: 505a64ca848a557117c9d2500f15ccc225f73022db129845eed5f782aa3be74e
+Section: admin
+Priority: optional
+Homepage: https://github.com/webstudiobond/backup-recovery-orchestrator
+Description: Point-in-time backup and disaster recovery orchestrator for Docker Compose
+
