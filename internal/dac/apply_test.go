@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
@@ -48,7 +49,6 @@ func TestApplyStackAndHostFiles(t *testing.T) {
 			chownCalls = append(chownCalls, ownerRecord{path: path, uid: uid, gid: gid})
 			return nil
 		},
-		Chmod: defaultChmod,
 	}
 
 	userCfg := config.UserConfig{Name: "angie", UID: 1002, GID: 1002}
@@ -173,10 +173,16 @@ func TestApplySingleRuleBranches(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
+	baseRoot, openErr := os.OpenRoot(root)
+	if openErr != nil {
+		t.Fatalf("open root: %v", openErr)
+	}
+	defer closeRoot(t, baseRoot)
+
 	applier := NewApplier()
 	userCfg := config.UserConfig{Name: "rule_app", UID: 1000, GID: 1000}
 
-	changes, err := applier.applySingleRule(context.Background(), symlinkTarget, userCfg, &config.DACRule{}, false)
+	changes, err := applier.applyRuleInRoot(context.Background(), baseRoot, root, "symlink_file.txt", userCfg, &config.DACRule{}, false)
 	if err != nil {
 		t.Fatalf("unexpected error for symlink rule: %v", err)
 	}
@@ -185,17 +191,17 @@ func TestApplySingleRuleBranches(t *testing.T) {
 	}
 
 	invalidOwnerRule := config.DACRule{Owner: "invalid_owner_spec"}
-	if _, err := applier.applySingleRule(context.Background(), targetFile, userCfg, &invalidOwnerRule, false); err == nil {
+	if _, err := applier.applyRuleInRoot(context.Background(), baseRoot, root, "regular_file.txt", userCfg, &invalidOwnerRule, false); err == nil {
 		t.Fatalf("expected error on invalid owner in single rule")
 	}
 
 	invalidDirModeRule := config.DACRule{DirMode: "0999"}
-	if _, err := applier.applySingleRule(context.Background(), targetFile, userCfg, &invalidDirModeRule, false); err == nil {
+	if _, err := applier.applyRuleInRoot(context.Background(), baseRoot, root, "regular_file.txt", userCfg, &invalidDirModeRule, false); err == nil {
 		t.Fatalf("expected error on invalid dir_mode in single rule")
 	}
 
 	invalidFileModeRule := config.DACRule{FileMode: "0999"}
-	if _, err := applier.applySingleRule(context.Background(), targetFile, userCfg, &invalidFileModeRule, false); err == nil {
+	if _, err := applier.applyRuleInRoot(context.Background(), baseRoot, root, "regular_file.txt", userCfg, &invalidFileModeRule, false); err == nil {
 		t.Fatalf("expected error on invalid file_mode in single rule")
 	}
 
@@ -205,67 +211,12 @@ func TestApplySingleRuleBranches(t *testing.T) {
 		},
 	}
 	failingRule := config.DACRule{FileMode: "0644"}
-	if _, err := failingApplier.applySingleRule(context.Background(), targetFile, userCfg, &failingRule, false); err == nil {
-		t.Fatalf("expected commitChange error in single rule")
+	if _, err := failingApplier.applyRuleInRoot(context.Background(), baseRoot, root, "regular_file.txt", userCfg, &failingRule, false); err == nil {
+		t.Fatalf("expected commit error in single rule")
 	}
 }
 
-func TestWalkAndApplyErrors(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	subDir := filepath.Join(root, "walk_sub")
-	if err := os.MkdirAll(subDir, 0o750); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	firstFile := filepath.Join(subDir, "1_file.txt")
-	secondFile := filepath.Join(subDir, "2_file.txt")
-	for _, f := range []string{firstFile, secondFile} {
-		if err := os.WriteFile(f, []byte("data"), 0o600); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-	}
-
-	applier := NewApplier()
-	if _, err := applier.walkAndApply(context.Background(), "/nonexistent/dac_walk_root", 0, 0, false, 0, false, 0, false, false); err == nil {
-		t.Fatalf("expected error walking nonexistent root")
-	}
-
-	canceledCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, ctxErr := applier.walkAndApply(canceledCtx, root, 0, 0, false, 0, false, 0, false, false)
-	if ctxErr == nil {
-		t.Fatalf("expected context canceled error during walk")
-	}
-
-	commitFailApplier := &Applier{
-		Chmod: func(_ string, _ os.FileMode) error {
-			return errors.New("walk chmod failed")
-		},
-	}
-	_, commitErr := commitFailApplier.walkAndApply(context.Background(), root, 0, 0, false, 0o755, true, 0o644, true, false)
-	if commitErr == nil {
-		t.Fatalf("expected commitChange error during walk")
-	}
-
-	removedApplier := &Applier{
-		Chmod: func(p string, _ os.FileMode) error {
-			if filepath.Base(p) == "1_file.txt" {
-				if rmErr := os.Remove(secondFile); rmErr != nil {
-					return rmErr
-				}
-			}
-			return nil
-		},
-	}
-	_, statErr := removedApplier.walkAndApply(context.Background(), subDir, 0, 0, false, 0, false, 0o600, true, false)
-	if statErr == nil {
-		t.Fatalf("expected entry.Info error after file deletion")
-	}
-}
-
-func TestPopulatePrevAttrsAndCommitChangeFallbacks(t *testing.T) {
+func TestPopulatePrevAttrsNil(t *testing.T) {
 	t.Parallel()
 
 	var ch Change
@@ -273,58 +224,81 @@ func TestPopulatePrevAttrsAndCommitChangeFallbacks(t *testing.T) {
 	if ch.HasPrev {
 		t.Fatalf("expected HasPrev to be false for nil info")
 	}
+}
 
-	tmpDir := t.TempDir()
-	testPath := filepath.Join(tmpDir, "commit_test.txt")
-	if err := os.WriteFile(testPath, []byte("data"), 0o600); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
+func TestApplyBranchesWithMocks(t *testing.T) {
+	origRootStat := rootStat
+	origRootClose := rootClose
+	origFileChmod := fileChmod
+	origRootOpenRoot := rootOpenRoot
+	t.Cleanup(func() {
+		rootStat = origRootStat
+		rootClose = origRootClose
+		fileChmod = origFileChmod
+		rootOpenRoot = origRootOpenRoot
+	})
 
-	defaultApplier := &Applier{}
-	dryChange := Change{
-		Path:     testPath,
-		Mode:     0o644,
-		HasMode:  true,
-		UID:      os.Getuid(),
-		GID:      os.Getgid(),
-		HasOwner: true,
-	}
-	if err := defaultApplier.commitChange(&dryChange, true); err != nil {
-		t.Fatalf("unexpected error in dry-run commitChange: %v", err)
-	}
+	stackDir := t.TempDir()
+	userCfg := config.UserConfig{Name: "app_tester", UID: 1001, GID: 1001}
+	applier := NewApplier()
 
-	skippedChange := Change{Path: testPath, Skipped: true}
-	if err := defaultApplier.commitChange(&skippedChange, false); err != nil {
-		t.Fatalf("unexpected error on skipped change commit: %v", err)
+	for _, d := range []string{"subfolder", "subclose", "subopen"} {
+		if err := os.Mkdir(filepath.Join(stackDir, d), 0o750); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
 	}
-
-	realChange := Change{
-		Path:     testPath,
-		Mode:     0o640,
-		HasMode:  true,
-		UID:      os.Getuid(),
-		GID:      os.Getgid(),
-		HasOwner: true,
+	sub := filepath.Join(stackDir, "subfolder")
+	deepFile := filepath.Join(sub, "deep.txt")
+	if err := os.WriteFile(deepFile, []byte("ok"), 0o600); err != nil {
+		t.Fatalf("write deep: %v", err)
 	}
-	if err := defaultApplier.commitChange(&realChange, false); err != nil {
-		t.Fatalf("expected default syscall fallback to succeed: %v", err)
+	symSub := filepath.Join(stackDir, "symsub")
+	if err := os.Symlink(sub, symSub); err != nil {
+		t.Fatalf("symlink symsub: %v", err)
 	}
-
-	failChmodApplier := &Applier{
-		Chmod: func(_ string, _ os.FileMode) error {
-			return errors.New("chmod error")
-		},
-	}
-	if err := failChmodApplier.commitChange(&realChange, false); err == nil {
-		t.Fatalf("expected error from failChmodApplier")
+	fifoPath := filepath.Join(stackDir, "leaf.fifo")
+	if err := syscall.Mkfifo(fifoPath, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
 	}
 
-	failChownApplier := &Applier{
-		Lchown: func(_ string, _ int, _ int) error {
-			return errors.New("lchown error")
-		},
+	cases := []struct {
+		setup   func()
+		cleanup func()
+		rule    config.DACRule
+		wantErr bool
+	}{
+		{setup: func() { rootStat = mockFailingRootStat }, cleanup: func() { rootStat = origRootStat }, rule: config.DACRule{Path: ".", FileMode: "0600"}, wantErr: true},
+		{setup: func() { rootStat = func(_ *os.Root, _ string) (os.FileInfo, error) { return nil, os.ErrNotExist } }, cleanup: func() { rootStat = origRootStat }, rule: config.DACRule{Path: ".", FileMode: "0600", Optional: true}, wantErr: false},
+		{rule: config.DACRule{Path: ".", Owner: "invalid_spec"}, wantErr: true},
+		{setup: func() { fileChmod = mockFailingFileChmod }, cleanup: func() { fileChmod = origFileChmod }, rule: config.DACRule{Path: ".", DirMode: "0700"}, wantErr: true},
+		{setup: func() { rootClose = mockFailingRootClose }, cleanup: func() { rootClose = origRootClose }, rule: config.DACRule{Path: ".", DirMode: "0700"}, wantErr: true},
+		{rule: config.DACRule{Path: ".", DirMode: "0700", Recursive: true}, wantErr: false},
+		{rule: config.DACRule{Path: "subfolder", DirMode: "0700"}, wantErr: false},
+		{setup: func() { rootClose = mockFailingRootClose }, cleanup: func() { rootClose = origRootClose }, rule: config.DACRule{Path: "subclose", DirMode: "0700"}, wantErr: true},
+		{rule: config.DACRule{Path: "missing_int/file.txt", FileMode: "0600"}, wantErr: true},
+		{rule: config.DACRule{Path: "missing_int/file.txt", FileMode: "0600", Optional: true}, wantErr: false},
+		{rule: config.DACRule{Path: "missing_leaf.txt", FileMode: "0600"}, wantErr: true},
+		{rule: config.DACRule{Path: "symsub/deep.txt", FileMode: "0600"}, wantErr: true},
+		{rule: config.DACRule{Path: "leaf.fifo", FileMode: "0640"}, wantErr: false},
+		{setup: func() { rootOpenRoot = mockFailingRootOpenRoot }, cleanup: func() { rootOpenRoot = origRootOpenRoot }, rule: config.DACRule{Path: "subopen", DirMode: "0700"}, wantErr: true},
+		{setup: func() { rootClose = mockFailingRootClose }, cleanup: func() { rootClose = origRootClose }, rule: config.DACRule{Path: "subfolder/deep.txt", FileMode: "0600"}, wantErr: true},
 	}
-	if err := failChownApplier.commitChange(&realChange, false); err == nil {
-		t.Fatalf("expected error from failChownApplier")
+	for i, tc := range cases {
+		if tc.setup != nil {
+			tc.setup()
+		}
+		_, err := applier.ApplyStack(context.Background(), stackDir, userCfg, []config.DACRule{tc.rule}, false)
+		if tc.cleanup != nil {
+			tc.cleanup()
+		}
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("case %d (%+v): wantErr=%v, got=%v", i, tc.rule, tc.wantErr, err)
+		}
 	}
+
+	fifoChanges, fifoErr := applier.ApplyStack(context.Background(), stackDir, userCfg, []config.DACRule{{Path: "leaf.fifo", FileMode: "0640"}}, false)
+	if fifoErr != nil || len(fifoChanges) != 1 || !fifoChanges[0].Skipped {
+		t.Fatalf("expected single skipped change for FIFO, got %+v, err: %v", fifoChanges, fifoErr)
+	}
+	assertPerm(t, fifoPath, 0o600)
 }

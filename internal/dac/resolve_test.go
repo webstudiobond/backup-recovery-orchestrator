@@ -163,6 +163,7 @@ func TestResolveWithinRoot(t *testing.T) {
 		relPath string
 		wantErr bool
 	}{
+		{name: "empty path rejected", relPath: "\t", wantErr: true},
 		{name: "absolute path rejected", relPath: "/etc/shadow", wantErr: true},
 		{name: "parent traversal rejected", relPath: "../outside_root", wantErr: true},
 		{name: "valid relative nested path", relPath: "sub/dir_path", wantErr: false},

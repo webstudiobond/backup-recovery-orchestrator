@@ -3,6 +3,7 @@ package dac
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -86,24 +87,25 @@ type Applier struct {
 	LookupGroup func(name string) (int, error)
 }
 
-func defaultLchown(path string, uid, gid int) error {
-	if err := os.Lchown(path, uid, gid); err != nil {
-		return fmt.Errorf("lchown %q (%d:%d): %w", path, uid, gid, err)
-	}
-	return nil
-}
-
-func defaultChmod(path string, mode os.FileMode) error {
-	if err := os.Chmod(path, mode); err != nil {
-		return fmt.Errorf("chmod %q (%04o): %w", path, mode, err)
-	}
-	return nil
-}
-
 var (
 	userLookup      = user.Lookup
 	userLookupGroup = user.LookupGroup
 	filepathAbs     = filepath.Abs
+	openRoot        = os.OpenRoot
+	rootSameFile    = os.SameFile
+	rootClose       = (*os.Root).Close
+	rootLstat       = (*os.Root).Lstat
+	rootStat        = (*os.Root).Stat
+	rootOpenDot     = (*os.Root).Open
+	rootOpenFile    = (*os.Root).OpenFile
+	rootOpenRoot    = (*os.Root).OpenRoot
+	rootLchown      = (*os.Root).Lchown
+	rootChmod       = (*os.Root).Chmod
+	fileClose       = (*os.File).Close
+	fileStat        = (*os.File).Stat
+	fileChown       = (*os.File).Chown
+	fileChmod       = (*os.File).Chmod
+	fileReadDir     = (*os.File).ReadDir
 )
 
 func defaultLookupUser(name string) (int, error) {
@@ -130,11 +132,9 @@ func defaultLookupGroup(name string) (int, error) {
 	return id, nil
 }
 
-// NewApplier constructs an Applier backed by standard OS ownership and permission system calls.
+// NewApplier constructs an Applier backed by descriptor-safe OS ownership and permission system calls.
 func NewApplier() *Applier {
 	return &Applier{
-		Lchown:      defaultLchown,
-		Chmod:       defaultChmod,
 		LookupUser:  defaultLookupUser,
 		LookupGroup: defaultLookupGroup,
 	}
@@ -150,16 +150,33 @@ func (a *Applier) ApplyStack(ctx context.Context, stackDir string, stackUser con
 	if err != nil {
 		return nil, fmt.Errorf("resolve stack_dir %q: %w", stackDir, err)
 	}
+	if len(rules) == 0 {
+		return nil, nil
+	}
 
+	stackRoot, openErr := openRoot(absRoot)
+	if openErr != nil {
+		return nil, fmt.Errorf("open stack_dir %q: %w", absRoot, openErr)
+	}
+
+	changes, applyErr := a.applyStackRules(ctx, stackRoot, absRoot, stackUser, rules, dryRun)
+	closeErr := rootClose(stackRoot)
+	if closeErr != nil {
+		return nil, errors.Join(applyErr, fmt.Errorf("close stack_dir %q: %w", absRoot, closeErr))
+	}
+	return changes, applyErr
+}
+
+func (a *Applier) applyStackRules(ctx context.Context, stackRoot *os.Root, absRoot string, stackUser config.UserConfig, rules []config.DACRule, dryRun bool) ([]Change, error) {
 	changes := make([]Change, 0, len(rules))
 	for i := range rules {
 		rule := &rules[i]
-		target, pathErr := resolveWithinRoot(absRoot, rule.Path)
+		cleanRel, pathErr := resolveWithinRoot(absRoot, rule.Path)
 		if pathErr != nil {
 			return nil, fmt.Errorf("dac rule %q: %w", rule.Path, pathErr)
 		}
 
-		applied, applyErr := a.applySingleRule(ctx, target, stackUser, rule, dryRun)
+		applied, applyErr := a.applyRuleInRoot(ctx, stackRoot, absRoot, cleanRel, stackUser, rule, dryRun)
 		if applyErr != nil {
 			return nil, fmt.Errorf("apply dac rule %q: %w", rule.Path, applyErr)
 		}
@@ -180,19 +197,47 @@ func (a *Applier) ApplyHostFiles(ctx context.Context, stackUser config.UserConfi
 		if item.Owner == "" && item.DirMode == "" && item.FileMode == "" {
 			continue
 		}
-		rule := config.DACRule{
-			Path:      item.Path,
-			Owner:     item.Owner,
-			DirMode:   item.DirMode,
-			FileMode:  item.FileMode,
-			Recursive: true,
-			Optional:  item.Optional,
-		}
-		applied, err := a.applySingleRule(ctx, filepath.Clean(item.Path), stackUser, &rule, dryRun)
+		applied, err := a.applyHostFileItem(ctx, stackUser, item, dryRun)
 		if err != nil {
 			return nil, fmt.Errorf("apply host_files DAC for %q: %w", item.Path, err)
 		}
 		changes = append(changes, applied...)
 	}
 	return changes, nil
+}
+
+func (a *Applier) applyHostFileItem(ctx context.Context, stackUser config.UserConfig, item *config.HostFileConfig, dryRun bool) ([]Change, error) {
+	cleanPath := filepath.Clean(item.Path)
+	parentDir := filepath.Dir(cleanPath)
+	baseName := filepath.Base(cleanPath)
+	if cleanPath == string(filepath.Separator) || baseName == "." || baseName == string(filepath.Separator) {
+		return nil, fmt.Errorf("invalid host_file path %q", item.Path)
+	}
+
+	parentRoot, openErr := openRoot(parentDir)
+	if openErr != nil {
+		if errors.Is(openErr, os.ErrNotExist) && item.Optional {
+			return []Change{{
+				Path:      cleanPath,
+				Skipped:   true,
+				SkipCause: "optional path not present",
+			}}, nil
+		}
+		return nil, fmt.Errorf("open parent directory %q: %w", parentDir, openErr)
+	}
+
+	rule := config.DACRule{
+		Path:      baseName,
+		Owner:     item.Owner,
+		DirMode:   item.DirMode,
+		FileMode:  item.FileMode,
+		Recursive: true,
+		Optional:  item.Optional,
+	}
+	applied, applyErr := a.applyRuleInRoot(ctx, parentRoot, parentDir, baseName, stackUser, &rule, dryRun)
+	closeErr := rootClose(parentRoot)
+	if closeErr != nil {
+		return nil, errors.Join(applyErr, fmt.Errorf("close parent directory %q: %w", parentDir, closeErr))
+	}
+	return applied, applyErr
 }

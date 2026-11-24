@@ -8,128 +8,236 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 )
 
-func (a *Applier) applySingleRule(ctx context.Context, target string, stackUser config.UserConfig, rule *config.DACRule, dryRun bool) ([]Change, error) {
-	info, err := os.Lstat(target)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) && rule.Optional {
-			return []Change{{
-				Path:      target,
-				Skipped:   true,
-				SkipCause: "optional path not present",
-			}}, nil
+type dacPolicy struct {
+	uid         int
+	gid         int
+	dirMode     os.FileMode
+	fileMode    os.FileMode
+	hasOwner    bool
+	hasDirMode  bool
+	hasFileMode bool
+	dryRun      bool
+}
+
+func (a *Applier) applyRuleInRoot(
+	ctx context.Context,
+	baseRoot *os.Root,
+	baseAbs string,
+	cleanRel string,
+	stackUser config.UserConfig,
+	rule *config.DACRule,
+	dryRun bool,
+) ([]Change, error) {
+	if cleanRel == "." {
+		return a.applyRootDirRule(ctx, baseRoot, baseAbs, stackUser, rule, dryRun)
+	}
+	return a.applySubpathRule(ctx, baseRoot, baseAbs, cleanRel, stackUser, rule, dryRun)
+}
+
+func (a *Applier) applyRootDirRule(
+	ctx context.Context,
+	baseRoot *os.Root,
+	baseAbs string,
+	stackUser config.UserConfig,
+	rule *config.DACRule,
+	dryRun bool,
+) ([]Change, error) {
+	info, statErr := rootStat(baseRoot, ".")
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) && rule.Optional {
+			return []Change{optionalSkippedChange(baseAbs)}, nil
 		}
-		return nil, fmt.Errorf("stat %q: %w", target, err)
+		return nil, fmt.Errorf("stat %q: %w", baseAbs, statErr)
+	}
+	policy, polErr := a.buildDACPolicy(stackUser, rule, dryRun)
+	if polErr != nil {
+		return nil, polErr
+	}
+	if !rule.Recursive {
+		change, applyErr := a.applyDirNode(baseRoot, baseAbs, info, &policy)
+		if applyErr != nil {
+			return nil, applyErr
+		}
+		return []Change{change}, nil
+	}
+	return a.walkRootAndApply(ctx, baseRoot, baseAbs, info, &policy)
+}
+
+func (a *Applier) buildDACPolicy(stackUser config.UserConfig, rule *config.DACRule, dryRun bool) (dacPolicy, error) {
+	uid, gid, hasOwner, ownerErr := a.resolveOwner(rule.Owner, stackUser)
+	if ownerErr != nil {
+		return dacPolicy{}, ownerErr
+	}
+	dirMode, hasDirMode, dirErr := parseOptionalMode(rule.DirMode)
+	if dirErr != nil {
+		return dacPolicy{}, dirErr
+	}
+	fileMode, hasFileMode, fileErr := parseOptionalMode(rule.FileMode)
+	if fileErr != nil {
+		return dacPolicy{}, fileErr
+	}
+	return dacPolicy{
+		uid:         uid,
+		gid:         gid,
+		dirMode:     dirMode,
+		fileMode:    fileMode,
+		hasOwner:    hasOwner,
+		hasDirMode:  hasDirMode,
+		hasFileMode: hasFileMode,
+		dryRun:      dryRun,
+	}, nil
+}
+
+func (a *Applier) applySubpathRule(
+	ctx context.Context,
+	baseRoot *os.Root,
+	baseAbs string,
+	cleanRel string,
+	stackUser config.UserConfig,
+	rule *config.DACRule,
+	dryRun bool,
+) (changes []Change, err error) {
+	parts := strings.Split(filepath.ToSlash(cleanRel), "/")
+	targetFullPath := filepath.Join(baseAbs, cleanRel)
+
+	parentRoot, closeParent, found, navErr := navigateParentRoot(baseRoot, parts[:len(parts)-1], targetFullPath)
+	if navErr != nil {
+		return nil, navErr
+	}
+	if !found {
+		if rule.Optional {
+			return []Change{optionalSkippedChange(targetFullPath)}, nil
+		}
+		return nil, fmt.Errorf("stat %q: %w", targetFullPath, os.ErrNotExist)
+	}
+	if closeParent {
+		defer func() {
+			if closeErr := rootClose(parentRoot); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close parent of %q: %w", targetFullPath, closeErr))
+			}
+		}()
 	}
 
+	lastSeg := parts[len(parts)-1]
+	return a.applyRuleLeaf(ctx, parentRoot, lastSeg, targetFullPath, stackUser, rule, dryRun)
+}
+
+func (a *Applier) applyRuleLeaf(
+	ctx context.Context,
+	parentRoot *os.Root,
+	lastSeg string,
+	targetFullPath string,
+	stackUser config.UserConfig,
+	rule *config.DACRule,
+	dryRun bool,
+) ([]Change, error) {
+	info, statErr := rootLstat(parentRoot, lastSeg)
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) && rule.Optional {
+			return []Change{optionalSkippedChange(targetFullPath)}, nil
+		}
+		return nil, fmt.Errorf("stat %q: %w", targetFullPath, statErr)
+	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return []Change{{
-			Path:      target,
+			Path:      targetFullPath,
 			Skipped:   true,
 			SkipCause: "refusing to modify symlink target",
 		}}, nil
 	}
-
-	uid, gid, hasOwner, ownerErr := a.resolveOwner(rule.Owner, stackUser)
-	if ownerErr != nil {
-		return nil, ownerErr
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		return []Change{{
+			Path:      targetFullPath,
+			Skipped:   true,
+			SkipCause: "refusing to modify non-regular target",
+		}}, nil
 	}
 
-	dirMode, hasDirMode, dirErr := parseOptionalMode(rule.DirMode)
-	if dirErr != nil {
-		return nil, dirErr
-	}
-	fileMode, hasFileMode, fileErr := parseOptionalMode(rule.FileMode)
-	if fileErr != nil {
-		return nil, fileErr
+	policy, polErr := a.buildDACPolicy(stackUser, rule, dryRun)
+	if polErr != nil {
+		return nil, polErr
 	}
 
-	if !rule.Recursive || !info.IsDir() {
-		change := Change{
-			Path:     target,
-			UID:      uid,
-			GID:      gid,
-			HasOwner: hasOwner,
-		}
-		populatePrevAttrs(&change, info)
-		if info.IsDir() && hasDirMode {
-			change.Mode = dirMode
-			change.HasMode = true
-		} else if !info.IsDir() && hasFileMode {
-			change.Mode = fileMode
-			change.HasMode = true
-		}
-		if err := a.commitChange(&change, dryRun); err != nil {
+	if !info.IsDir() {
+		change, err := a.applyFileNode(parentRoot, lastSeg, targetFullPath, info, &policy)
+		if err != nil {
 			return nil, err
 		}
 		return []Change{change}, nil
 	}
 
-	return a.walkAndApply(ctx, target, uid, gid, hasOwner, dirMode, hasDirMode, fileMode, hasFileMode, dryRun)
+	dirRoot, openErr := openExistingChildDir(parentRoot, lastSeg, info, targetFullPath)
+	if openErr != nil {
+		return nil, openErr
+	}
+
+	var (
+		changes []Change
+		err     error
+	)
+	if !rule.Recursive {
+		var change Change
+		change, err = a.applyDirNode(dirRoot, targetFullPath, info, &policy)
+		if err == nil {
+			changes = []Change{change}
+		}
+	} else {
+		changes, err = a.walkRootAndApply(ctx, dirRoot, targetFullPath, info, &policy)
+	}
+	if closeErr := rootClose(dirRoot); closeErr != nil {
+		return nil, errors.Join(err, fmt.Errorf("close directory %q: %w", targetFullPath, closeErr))
+	}
+	return changes, err
 }
 
-func (a *Applier) walkAndApply(
-	ctx context.Context,
-	root string,
-	uid, gid int,
-	hasOwner bool,
-	dirMode os.FileMode,
-	hasDirMode bool,
-	fileMode os.FileMode,
-	hasFileMode bool,
-	dryRun bool,
-) ([]Change, error) {
-	var changes []Change
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return fmt.Errorf("context canceled during DAC walk: %w", ctxErr)
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			changes = append(changes, Change{
-				Path:      path,
-				Skipped:   true,
-				SkipCause: "symlink skipped",
-			})
-			return nil
-		}
-
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			return fmt.Errorf("stat %q: %w", path, infoErr)
-		}
-
-		change := Change{
-			Path:     path,
-			UID:      uid,
-			GID:      gid,
-			HasOwner: hasOwner,
-		}
-		populatePrevAttrs(&change, info)
-		if entry.IsDir() && hasDirMode {
-			change.Mode = dirMode
-			change.HasMode = true
-		} else if !entry.IsDir() && hasFileMode {
-			change.Mode = fileMode
-			change.HasMode = true
-		}
-
-		if err := a.commitChange(&change, dryRun); err != nil {
-			return err
-		}
-		changes = append(changes, change)
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("walk %q: %w", root, err)
+func (a *Applier) applyDirNode(dirRoot *os.Root, fullPath string, info fs.FileInfo, policy *dacPolicy) (Change, error) {
+	change := Change{
+		Path:     fullPath,
+		UID:      policy.uid,
+		GID:      policy.gid,
+		HasOwner: policy.hasOwner,
 	}
-	return changes, nil
+	populatePrevAttrs(&change, info)
+	if policy.hasDirMode {
+		change.Mode = policy.dirMode
+		change.HasMode = true
+	}
+	if policy.dryRun || (!change.HasOwner && !change.HasMode) {
+		return change, nil
+	}
+
+	if err := a.commitDirChange(dirRoot, &change); err != nil {
+		return Change{}, err
+	}
+	return change, nil
+}
+
+func (a *Applier) applyFileNode(parentRoot *os.Root, name, fullPath string, info fs.FileInfo, policy *dacPolicy) (Change, error) {
+	change := Change{
+		Path:     fullPath,
+		UID:      policy.uid,
+		GID:      policy.gid,
+		HasOwner: policy.hasOwner,
+	}
+	populatePrevAttrs(&change, info)
+	if policy.hasFileMode {
+		change.Mode = policy.fileMode
+		change.HasMode = true
+	}
+	if policy.dryRun || (!change.HasOwner && !change.HasMode) {
+		return change, nil
+	}
+
+	if err := a.commitFileChange(parentRoot, name, info, &change); err != nil {
+		return Change{}, err
+	}
+	return change, nil
 }
 
 func populatePrevAttrs(change *Change, info fs.FileInfo) {
@@ -146,27 +254,26 @@ func populatePrevAttrs(change *Change, info fs.FileInfo) {
 	}
 }
 
-func (a *Applier) commitChange(change *Change, dryRun bool) error {
-	if dryRun || change.Skipped {
-		return nil
+func optionalSkippedChange(path string) Change {
+	return Change{
+		Path:      path,
+		Skipped:   true,
+		SkipCause: "optional path not present",
 	}
-	if change.HasOwner {
-		lchown := a.Lchown
-		if lchown == nil {
-			lchown = defaultLchown
-		}
-		if err := lchown(change.Path, change.UID, change.GID); err != nil {
-			return err
-		}
+}
+
+func symlinkSkippedChange(path string) Change {
+	return Change{
+		Path:      path,
+		Skipped:   true,
+		SkipCause: "symlink skipped",
 	}
-	if change.HasMode {
-		chmod := a.Chmod
-		if chmod == nil {
-			chmod = defaultChmod
-		}
-		if err := chmod(change.Path, change.Mode); err != nil {
-			return err
-		}
+}
+
+func nonRegularSkippedChange(path string) Change {
+	return Change{
+		Path:      path,
+		Skipped:   true,
+		SkipCause: "non-regular file skipped",
 	}
-	return nil
 }

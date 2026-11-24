@@ -150,23 +150,6 @@ func TestCollapseChangesEdgeCases(t *testing.T) {
 func TestDefaultSyscalls(t *testing.T) {
 	t.Parallel()
 
-	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "test_file.txt")
-	if err := os.WriteFile(tmpFile, []byte("content"), 0o600); err != nil {
-		t.Fatalf("write temp file: %v", err)
-	}
-
-	if err := defaultLchown(tmpFile, os.Getuid(), os.Getgid()); err != nil {
-		t.Fatalf("defaultLchown failed on own file: %v", err)
-	}
-	if err := defaultLchown("/nonexistent/path/for/dac", 0, 0); err == nil {
-		t.Fatalf("expected error from defaultLchown on nonexistent path")
-	}
-
-	if err := defaultChmod("/nonexistent/path/for/dac", 0o600); err == nil {
-		t.Fatalf("expected error from defaultChmod on nonexistent path")
-	}
-
 	if _, err := defaultLookupUser("nonexistent_user_for_dac_9999"); err == nil {
 		t.Fatalf("expected error from defaultLookupUser")
 	}
@@ -217,6 +200,21 @@ func TestApplyHostFilesBranches(t *testing.T) {
 	if failErr == nil {
 		t.Fatalf("expected error on nonexistent host file")
 	}
+
+	optionalMissing := []config.HostFileConfig{
+		{Path: "/nonexistent_dir_12345/host/file", Owner: "sysadmin:sysadmin", FileMode: "0600", Optional: true},
+	}
+	optChanges, optErr := applier.ApplyHostFiles(context.Background(), userCfg, optionalMissing, false)
+	if optErr != nil || len(optChanges) != 1 || !optChanges[0].Skipped {
+		t.Fatalf("expected optional skipped change, got %v, err: %v", optChanges, optErr)
+	}
+
+	invalidRootItem := []config.HostFileConfig{
+		{Path: "/", Owner: "1:1", DirMode: "0755"},
+	}
+	if _, rootErr := applier.ApplyHostFiles(context.Background(), userCfg, invalidRootItem, false); rootErr == nil {
+		t.Fatalf("expected error on root path host_file")
+	}
 }
 
 func mockInvalidUserLookup(_ string) (*user.User, error) {
@@ -260,9 +258,46 @@ func TestApplyStackAbsError(t *testing.T) {
 	filepathAbs = mockFailingAbs
 
 	applier := NewApplier()
-	userCfg := config.UserConfig{Name: "app", UID: 1000, GID: 1000}
+	userCfg := config.UserConfig{Name: "abs_err_app", UID: 1000, GID: 1000}
 	_, err := applier.ApplyStack(context.Background(), "/tmp/dir", userCfg, nil, false)
 	if err == nil {
 		t.Fatalf("expected error from failing filepathAbs")
+	}
+}
+
+func TestApplyStackCloseError(t *testing.T) {
+	origClose := rootClose
+	t.Cleanup(func() {
+		rootClose = origClose
+	})
+
+	rootClose = mockFailingRootClose
+	applier := NewApplier()
+	userCfg := config.UserConfig{Name: "close_err_app", UID: 1000, GID: 1000}
+	tmpDir := t.TempDir()
+	rules := []config.DACRule{{Path: ".", Optional: true}}
+	if _, err := applier.ApplyStack(context.Background(), tmpDir, userCfg, rules, false); err == nil {
+		t.Fatalf("expected error from failing rootClose in ApplyStack")
+	}
+	rootClose = origClose
+	if _, err := applier.ApplyStack(context.Background(), "/nonexistent_stack_dir_for_test", userCfg, rules, false); err == nil {
+		t.Fatalf("expected error from openRoot in ApplyStack")
+	}
+
+	emptyChanges, emptyErr := applier.ApplyStack(context.Background(), tmpDir, userCfg, nil, false)
+	if emptyErr != nil || emptyChanges != nil {
+		t.Fatalf("expected nil from empty rules in ApplyStack, got %v, err: %v", emptyChanges, emptyErr)
+	}
+
+	testFile := filepath.Join(tmpDir, "host.txt")
+	if err := os.WriteFile(testFile, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	hostItems := []config.HostFileConfig{
+		{Path: testFile, Owner: "1000:1000", FileMode: "0600"},
+	}
+	rootClose = mockFailingRootClose
+	if _, err := applier.ApplyHostFiles(context.Background(), userCfg, hostItems, false); err == nil {
+		t.Fatalf("expected error from failing rootClose in ApplyHostFiles")
 	}
 }

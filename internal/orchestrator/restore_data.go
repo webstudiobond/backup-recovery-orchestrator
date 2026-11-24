@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -12,51 +13,7 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 )
 
-func defaultOsRemove(name string) error {
-	if err := os.Remove(name); err != nil {
-		return fmt.Errorf("remove %q: %w", name, err)
-	}
-	return nil
-}
-
-func defaultOsReadDir(name string) ([]os.DirEntry, error) {
-	entries, err := os.ReadDir(name)
-	if err != nil {
-		return nil, fmt.Errorf("readdir %q: %w", name, err)
-	}
-	return entries, nil
-}
-
-func defaultOsLstat(name string) (os.FileInfo, error) {
-	info, err := os.Lstat(name)
-	if err != nil {
-		return nil, fmt.Errorf("lstat %q: %w", name, err)
-	}
-	return info, nil
-}
-
-func defaultOsRename(oldpath, newpath string) error {
-	if err := os.Rename(oldpath, newpath); err != nil {
-		return fmt.Errorf("rename %q -> %q: %w", oldpath, newpath, err)
-	}
-	return nil
-}
-
-func defaultOsMkdirAll(path string, perm os.FileMode) error {
-	if err := os.MkdirAll(path, perm); err != nil {
-		return fmt.Errorf("mkdirall %q: %w", path, err)
-	}
-	return nil
-}
-
-var (
-	filepathAbs = filepath.Abs
-	osRemove    = defaultOsRemove
-	osReadDir   = defaultOsReadDir
-	osLstat     = defaultOsLstat
-	osRename    = defaultOsRename
-	osMkdirAll  = defaultOsMkdirAll
-)
+var filepathAbs = filepath.Abs
 
 func (o *Orchestrator) restoreHostFiles(ctx context.Context, rctx *restoreExecutionContext) error {
 	if len(rctx.hostFiles) == 0 {
@@ -90,69 +47,79 @@ func (o *Orchestrator) restoreHostFiles(ctx context.Context, rctx *restoreExecut
 	return nil
 }
 
-func moveStackContents(ctx context.Context, stackDir, fromRel, toRel string) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context canceled before moving contents: %w", err)
+func moveStackContents(ctx context.Context, stackDir, fromRel, toRel string) (err error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("context canceled before moving contents: %w", ctxErr)
 	}
 
-	absRoot, err := filepathAbs(filepath.Clean(stackDir))
-	if err != nil {
-		return fmt.Errorf("resolve stack_dir %q: %w", stackDir, err)
+	absRoot, absErr := filepathAbs(filepath.Clean(stackDir))
+	if absErr != nil {
+		return fmt.Errorf("resolve stack_dir %q: %w", stackDir, absErr)
 	}
-	srcDir, err := resolveSafeStackSubdir(absRoot, fromRel)
-	if err != nil {
-		return fmt.Errorf("source path: %w", err)
+	srcRel, srcPathErr := resolveSafeStackSubdir(absRoot, fromRel)
+	if srcPathErr != nil {
+		return fmt.Errorf("source path: %w", srcPathErr)
 	}
-	dstDir, err := resolveSafeStackSubdir(absRoot, toRel)
-	if err != nil {
-		return fmt.Errorf("destination path: %w", err)
+	dstRel, dstPathErr := resolveSafeStackSubdir(absRoot, toRel)
+	if dstPathErr != nil {
+		return fmt.Errorf("destination path: %w", dstPathErr)
 	}
-	if srcDir == dstDir {
+	if srcRel == dstRel {
 		return fmt.Errorf("source and destination must differ (%q)", fromRel)
 	}
-	if strings.HasPrefix(dstDir, srcDir+string(filepath.Separator)) {
+	if strings.HasPrefix(dstRel, srcRel+"/") {
 		return fmt.Errorf("destination %q cannot reside inside source %q", toRel, fromRel)
 	}
 
-	srcInfo, err := osLstat(srcDir)
-	if err != nil {
-		return fmt.Errorf("stat source directory %q: %w", srcDir, err)
+	stackRoot, openErr := osOpenRoot(absRoot)
+	if openErr != nil {
+		return fmt.Errorf("open stack_dir %q: %w", absRoot, openErr)
 	}
-	if srcInfo.Mode()&os.ModeSymlink != 0 || !srcInfo.IsDir() {
-		return fmt.Errorf("source %q must be a real directory", srcDir)
+	defer func() {
+		if closeErr := rootClose(stackRoot); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close stack_dir %q: %w", absRoot, closeErr))
+		}
+	}()
+
+	srcRoot, srcErr := openStackDirNoSymlink(stackRoot, srcRel, false)
+	if srcErr != nil {
+		return srcErr
+	}
+	srcInfo, srcStatErr := rootStat(srcRoot, ".")
+	if srcStatErr != nil {
+		return errors.Join(fmt.Errorf("stat source directory %q: %w", srcRel, srcStatErr), rootClose(srcRoot))
+	}
+	dstRoot, dstErr := openStackDirNoSymlink(stackRoot, dstRel, true)
+	if dstErr != nil {
+		return errors.Join(dstErr, rootClose(srcRoot))
 	}
 
-	if err := prepareMoveTargetDir(dstDir); err != nil {
-		return err
-	}
-	if err := moveDirectoryEntries(ctx, srcDir, dstDir); err != nil {
-		return err
+	moveErr := moveDirectoryEntries(ctx, stackRoot, srcRoot, dstRoot, srcRel, dstRel)
+	closeErr := errors.Join(rootClose(srcRoot), rootClose(dstRoot))
+	if combined := errors.Join(moveErr, closeErr); combined != nil {
+		return combined
 	}
 
-	if rmErr := osRemove(srcDir); rmErr != nil {
-		return fmt.Errorf("remove empty source directory %q: %w", srcDir, rmErr)
-	}
-	return nil
+	return removeEmptyStackDir(stackRoot, srcRel, srcInfo)
 }
 
-func moveDirectoryEntries(ctx context.Context, srcDir, dstDir string) error {
-	entries, err := osReadDir(srcDir)
+func moveDirectoryEntries(ctx context.Context, stackRoot, srcRoot, dstRoot *os.Root, srcRel, dstRel string) error {
+	entries, err := rootReadDir(srcRoot)
 	if err != nil {
-		return fmt.Errorf("read source directory %q: %w", srcDir, err)
+		return fmt.Errorf("read source directory %q: %w", srcRel, err)
 	}
 	for _, entry := range entries {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("context canceled during move_contents: %w", ctxErr)
 		}
-		srcEntry := filepath.Join(srcDir, entry.Name())
-		dstEntry := filepath.Join(dstDir, entry.Name())
-		if _, statErr := osLstat(dstEntry); statErr == nil {
-			return fmt.Errorf("destination entry %q already exists", dstEntry)
+		name := entry.Name()
+		if _, statErr := rootLstat(dstRoot, name); statErr == nil {
+			return fmt.Errorf("destination entry %q already exists", path.Join(dstRel, name))
 		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return fmt.Errorf("stat destination entry %q: %w", dstEntry, statErr)
+			return fmt.Errorf("stat destination entry %q: %w", path.Join(dstRel, name), statErr)
 		}
-		if renErr := osRename(srcEntry, dstEntry); renErr != nil {
-			return fmt.Errorf("move %q to %q: %w", srcEntry, dstEntry, renErr)
+		if renErr := rootRename(stackRoot, srcRoot, dstRoot, srcRel, dstRel, name); renErr != nil {
+			return fmt.Errorf("move %q to %q: %w", path.Join(srcRel, name), path.Join(dstRel, name), renErr)
 		}
 	}
 	return nil
@@ -168,24 +135,7 @@ func resolveSafeStackSubdir(absRoot, rawRel string) (string, error) {
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q escapes stack_dir %q", rawRel, absRoot)
 	}
-	return candidate, nil
-}
-
-func prepareMoveTargetDir(dstDir string) error {
-	dstInfo, err := osLstat(dstDir)
-	if err == nil {
-		if dstInfo.Mode()&os.ModeSymlink != 0 || !dstInfo.IsDir() {
-			return fmt.Errorf("destination %q must be a real directory", dstDir)
-		}
-		return nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat destination directory %q: %w", dstDir, err)
-	}
-	if mkErr := osMkdirAll(dstDir, 0o700); mkErr != nil {
-		return fmt.Errorf("create destination directory %q: %w", dstDir, mkErr)
-	}
-	return nil
+	return filepath.ToSlash(rel), nil
 }
 
 func (o *Orchestrator) restoreDatabaseStep(ctx context.Context, rctx *restoreExecutionContext, databaseID string) error {

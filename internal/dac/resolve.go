@@ -93,6 +93,9 @@ func parseOptionalMode(raw string) (mode os.FileMode, set bool, err error) {
 }
 
 func resolveWithinRoot(absRoot, relPath string) (string, error) {
+	if strings.TrimSpace(relPath) == "" {
+		return "", fmt.Errorf("path %q must not be empty", relPath)
+	}
 	if filepath.IsAbs(relPath) {
 		return "", fmt.Errorf("path %q must be relative to stack_dir", relPath)
 	}
@@ -104,5 +107,5 @@ func resolveWithinRoot(absRoot, relPath string) (string, error) {
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q escapes stack_dir", relPath)
 	}
-	return joined, nil
+	return rel, nil
 }

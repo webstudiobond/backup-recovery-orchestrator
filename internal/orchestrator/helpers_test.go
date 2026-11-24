@@ -332,4 +332,66 @@ func assertBashContainerLayout(ctx context.Context, t *testing.T, archivePath, s
 	}
 }
 
+func closeOrchRoot(t *testing.T, r *os.Root) {
+	t.Helper()
+	if err := r.Close(); err != nil {
+		t.Fatalf("close root: %v", err)
+	}
+}
+
+func mockDifferentSameFile(_, _ fs.FileInfo) bool {
+	return false
+}
+
+func mockFailingRootClose(_ *os.Root) error {
+	return errors.New("simulated root close error")
+}
+
+func mockFailingRootLstat(_ *os.Root, _ string) (fs.FileInfo, error) {
+	return nil, errors.New("simulated root lstat error")
+}
+
+func mockFailingRootStat(_ *os.Root, _ string) (fs.FileInfo, error) {
+	return nil, errors.New("simulated root stat error")
+}
+
+func mockFailingRootOpenDot(_ *os.Root, _ string) (*os.File, error) {
+	return nil, errors.New("simulated root open dot error")
+}
+
+func mockFailingRootOpenRoot(_ *os.Root, _ string) (*os.Root, error) {
+	return nil, errors.New("simulated root open root error")
+}
+
+func mockFailingOpenRoot(_ string) (*os.Root, error) {
+	return nil, errors.New("simulated open root failure")
+}
+
+func mockFailingRootOpenFile(_ *os.Root, _ string, _ int, _ fs.FileMode) (*os.File, error) {
+	return nil, errors.New("simulated root open file error")
+}
+
+func mockFailingRootMkdir(_ *os.Root, _ string, _ fs.FileMode) error {
+	return errors.New("simulated root mkdir error")
+}
+
+func mockFailingFileReadDir(_ *os.File, _ int) ([]fs.DirEntry, error) {
+	return nil, errors.New("simulated file readdir error")
+}
+
+func mockFailingFileStat(_ *os.File) (fs.FileInfo, error) {
+	return nil, errors.New("simulated file stat error")
+}
+
+type fakeDirEntry struct {
+	infoErr error
+	name    string
+	isDir   bool
+}
+
+func (f fakeDirEntry) Name() string               { return f.name }
+func (f fakeDirEntry) IsDir() bool                { return f.isDir }
+func (f fakeDirEntry) Type() fs.FileMode          { return 0 }
+func (f fakeDirEntry) Info() (fs.FileInfo, error) { return nil, f.infoErr }
+
 var _ = fs.ModePerm
