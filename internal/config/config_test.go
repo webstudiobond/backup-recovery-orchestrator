@@ -46,6 +46,55 @@ func TestBundleStackByName(t *testing.T) {
 	}
 }
 
+func TestBundleAngieStack(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		serviceName string
+		stackName   string
+		wantMatch   bool
+	}{
+		{
+			name:      "default service name matches angie stack",
+			stackName: DefaultAngieService,
+			wantMatch: true,
+		},
+		{
+			name:        "custom service name matches configured stack",
+			serviceName: "proxy-edge",
+			stackName:   "proxy-edge",
+			wantMatch:   true,
+		},
+		{
+			name:        "missing angie stack returns nil",
+			serviceName: DefaultAngieService,
+			stackName:   "other-app",
+			wantMatch:   false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			bundle := Bundle{
+				Global: GlobalConfig{Angie: GlobalAngieConfig{ServiceName: tc.serviceName}},
+				Stacks: []StackConfig{{Name: tc.stackName, Enabled: true}},
+			}
+			got := bundle.AngieStack()
+			if !tc.wantMatch {
+				if got != nil {
+					t.Fatalf("expected nil AngieStack, got %+v", got)
+				}
+				return
+			}
+			if got == nil || got.Name != tc.stackName {
+				t.Fatalf("expected AngieStack %q, got %+v", tc.stackName, got)
+			}
+		})
+	}
+}
+
 func TestStackConfigRemoteCountFor(t *testing.T) {
 	t.Parallel()
 

@@ -264,6 +264,18 @@ func (b *Bundle) StackByName(name string) (StackConfig, bool) {
 	return StackConfig{}, false
 }
 
+// AngieStack returns the resolved stack configuration matching Global.Angie.ServiceName, or nil when absent.
+func (b *Bundle) AngieStack() *StackConfig {
+	name := b.Global.Angie.ServiceName
+	if name == "" {
+		name = DefaultAngieService
+	}
+	if st, ok := b.StackByName(name); ok {
+		return &st
+	}
+	return nil
+}
+
 // RemoteCountFor resolves the effective offsite retention count for a given stack and destination pair.
 func (s *StackConfig) RemoteCountFor(dest *DestinationConfig) int {
 	if dest != nil {

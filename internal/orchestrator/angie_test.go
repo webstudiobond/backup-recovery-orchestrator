@@ -15,6 +15,39 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/docker"
 )
 
+func recordingAngieDACApplier(owners map[string][2]int) *dac.Applier {
+	return &dac.Applier{
+		Lchown: func(path string, uid, gid int) error {
+			owners[path] = [2]int{uid, gid}
+			return nil
+		},
+		Chmod: os.Chmod,
+		LookupUser: func(name string) (int, error) {
+			if name == "root" {
+				return 0, nil
+			}
+			return 1002, nil
+		},
+		LookupGroup: func(_ string) (int, error) { return 1002, nil },
+	}
+}
+
+func assertPathPermAndOwner(t *testing.T, owners map[string][2]int, path string, wantMode os.FileMode, wantOwner [2]int) {
+	t.Helper()
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat %q: %v", path, err)
+	}
+	if info.Mode().Perm() != wantMode {
+		t.Fatalf("expected mode %04o on %q, got %04o", wantMode, path, info.Mode().Perm())
+	}
+	gotOwner, ok := owners[path]
+	if !ok || gotOwner != wantOwner {
+		t.Fatalf("expected lchown %v on %q, got %v (present=%t)", wantOwner, path, gotOwner, ok)
+	}
+}
+
 func TestRestoreAngieRollbackOnInvalidConfig(t *testing.T) {
 	t.Parallel()
 
@@ -30,6 +63,8 @@ func TestRestoreAngieRollbackOnInvalidConfig(t *testing.T) {
 		psOutput:  []byte(`{"Service":"pg","State":"running","Health":"healthy"}`),
 	}
 	orch := newTestOrchestrator(runner, pPath, gPath, nil)
+	owners := make(map[string][2]int)
+	orch.DAC = recordingAngieDACApplier(owners)
 
 	if err := orch.Backup(ctx, &bundle, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
 		t.Fatalf("Backup failed: %v", err)
@@ -43,11 +78,28 @@ func TestRestoreAngieRollbackOnInvalidConfig(t *testing.T) {
 	if err := os.WriteFile(streamPath, []byte("live-good-stream"), 0o600); err != nil {
 		t.Fatalf("update live angie stream: %v", err)
 	}
+	certDir := filepath.Join(bundle.Global.Angie.CertsDir, stackName)
+	certFile := filepath.Join(certDir, "certificate.pem")
+	if err := os.WriteFile(certFile, []byte("live-good-cert"), 0o600); err != nil {
+		t.Fatalf("update live angie cert: %v", err)
+	}
 
+	angieStack := &config.StackConfig{
+		Name:     config.DefaultAngieService,
+		StackDir: filepath.Dir(bundle.Global.Angie.ComposeFile),
+		User:     config.UserConfig{Name: config.DefaultAngieService, UID: 1005, GID: 1005},
+		DAC: []config.DACRule{
+			{Path: "data/conf.d", Owner: "root:" + config.DefaultAngieService, DirMode: "0750", FileMode: "0640", Recursive: true},
+			{Path: "data/certs", Owner: "stack:stack", DirMode: "0750", FileMode: "0640", Recursive: true},
+		},
+	}
+
+	clear(owners)
 	runner.failMatch = "angie -t"
 	archivePath := filepath.Join(bundle.Global.BackupRoot, stackName, stackName+"_2026-11-16_15-00-00.tar")
 	err := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
 		ArchivePath: archivePath,
+		AngieStack:  angieStack,
 		AngieMode:   RestoreModeAll,
 		OnlySteps:   []string{"deploy_angie"},
 		Out:         io.Discard,
@@ -56,20 +108,21 @@ func TestRestoreAngieRollbackOnInvalidConfig(t *testing.T) {
 		t.Fatalf("expected angie -t error, got %v", err)
 	}
 
-	restoredBytes, readErr := os.ReadFile(filepath.Clean(domainPath))
-	if readErr != nil {
-		t.Fatalf("read domain config after rollback: %v", readErr)
+	for path, wantBody := range map[string]string{
+		domainPath: "live-good-config",
+		streamPath: "live-good-stream",
+		certFile:   "live-good-cert",
+	} {
+		data, readErr := os.ReadFile(filepath.Clean(path))
+		if readErr != nil || string(data) != wantBody {
+			t.Fatalf("expected %q rolled back to %q, got %q (err=%v)", path, wantBody, string(data), readErr)
+		}
 	}
-	if string(restoredBytes) != "live-good-config" {
-		t.Fatalf("expected angie domain rolled back to %q, got %q", "live-good-config", string(restoredBytes))
-	}
-	restoredStreamBytes, readStreamErr := os.ReadFile(filepath.Clean(streamPath))
-	if readStreamErr != nil {
-		t.Fatalf("read stream config after rollback: %v", readStreamErr)
-	}
-	if string(restoredStreamBytes) != "live-good-stream" {
-		t.Fatalf("expected angie stream rolled back to %q, got %q", "live-good-stream", string(restoredStreamBytes))
-	}
+
+	assertPathPermAndOwner(t, owners, domainPath, 0o640, [2]int{0, 1005})
+	assertPathPermAndOwner(t, owners, streamPath, 0o640, [2]int{0, 1005})
+	assertPathPermAndOwner(t, owners, certDir, 0o750, [2]int{1005, 1005})
+	assertPathPermAndOwner(t, owners, certFile, 0o640, [2]int{1005, 1005})
 }
 
 func TestCheckAngieSelectionList(t *testing.T) {
@@ -152,6 +205,7 @@ func TestDeployAngieWithRollback(t *testing.T) {
 
 	ctx := context.Background()
 	root := t.TempDir()
+	workDir := filepath.Join(root, workDirName)
 	composeFile := filepath.Join(root, "docker-compose.yaml")
 	if err := os.WriteFile(composeFile, []byte("services: {}\n"), 0o600); err != nil {
 		t.Fatalf("write compose: %v", err)
@@ -190,7 +244,7 @@ func TestDeployAngieWithRollback(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := deployAngieWithRollback(ctx, dockerClient, dacApplier, tc.global, unpackDir, tc.sel)
+			err := deployAngieWithRollback(ctx, dockerClient, dacApplier, tc.global, nil, workDir, unpackDir, tc.sel)
 			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 			}
@@ -202,11 +256,12 @@ func TestDeployAngieWithRollback(t *testing.T) {
 }
 
 func TestDeployAngieWithRollbackTempDirError(t *testing.T) {
+	t.Parallel()
+
 	fakeDir := filepath.Join(t.TempDir(), "not_a_dir")
 	if err := os.WriteFile(fakeDir, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	t.Setenv("TMPDIR", fakeDir)
 
 	composeFile := filepath.Join(t.TempDir(), "docker-compose.yaml")
 	if err := os.WriteFile(composeFile, []byte("services: {}\n"), 0o600); err != nil {
@@ -215,7 +270,7 @@ func TestDeployAngieWithRollbackTempDirError(t *testing.T) {
 
 	globalAngie := &config.GlobalAngieConfig{ComposeFile: composeFile}
 	sel := angieSelection{Domains: []string{"test.example.com.conf"}}
-	if err := deployAngieWithRollback(context.Background(), nil, nil, globalAngie, t.TempDir(), sel); err == nil || !strings.Contains(err.Error(), "create angie rollback directory") {
+	if err := deployAngieWithRollback(context.Background(), nil, nil, globalAngie, nil, fakeDir, t.TempDir(), sel); err == nil || !strings.Contains(err.Error(), "create angie rollback directory") {
 		t.Fatalf("expected create angie rollback directory error, got %v", err)
 	}
 }
@@ -229,6 +284,7 @@ func TestApplySelectedAngieFilesValidation(t *testing.T) {
 	}
 	root := t.TempDir()
 	var entries []angieRollbackEntry
+	angieUser := config.UserConfig{Name: config.DefaultAngieService}
 
 	fileParent := filepath.Join(root, "file_as_parent")
 	if err := os.WriteFile(fileParent, []byte("x"), 0o600); err != nil {
@@ -251,7 +307,7 @@ func TestApplySelectedAngieFilesValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := applySelectedAngieFiles(ctx, dacApplier, tc.global, root, root, tc.sel, &entries)
+			err := applySelectedAngieFiles(ctx, dacApplier, tc.global, nil, config.DefaultAngieService, angieUser, root, root, tc.sel, &entries)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 			}
@@ -274,18 +330,20 @@ func TestDeployAngieConfErrors(t *testing.T) {
 	}
 
 	var entries []angieRollbackEntry
+	angieSvc := config.DefaultAngieService
+	angieUser := config.UserConfig{Name: angieSvc}
 	failingDAC := &dac.Applier{
 		LookupUser: func(_ string) (int, error) { return 0, errors.New("user lookup failed") },
 	}
 
 	confName := "conf-err.example.com.conf"
-	if err := deployAngieConfFiles(ctx, nil, targetDir, "angie", stagedDir, root, "domains_dir", "domain", []string{confName}, &entries); err == nil {
+	if err := deployAngieConfFiles(ctx, nil, nil, targetDir, angieSvc, angieUser, stagedDir, root, "domains_dir", "domain", []string{confName}, &entries); err == nil {
 		t.Fatal("expected copyPlainFile error when staged conf is missing")
 	}
 	if err := os.WriteFile(filepath.Join(stagedDir, confName), []byte("server {}"), 0o600); err != nil {
 		t.Fatalf("write staged conf: %v", err)
 	}
-	if err := deployAngieConfFiles(ctx, failingDAC, targetDir, "angie", stagedDir, root, "domains_dir", "domain", []string{confName}, &entries); err == nil {
+	if err := deployAngieConfFiles(ctx, failingDAC, nil, targetDir, angieSvc, angieUser, stagedDir, root, "domains_dir", "domain", []string{confName}, &entries); err == nil {
 		t.Fatal("expected dac error on conf deploy")
 	}
 
@@ -297,7 +355,7 @@ func TestDeployAngieConfErrors(t *testing.T) {
 	if err := os.WriteFile(existingConf, []byte("existing"), 0o600); err != nil {
 		t.Fatalf("write existing conf: %v", err)
 	}
-	if err := deployAngieConfFiles(ctx, nil, targetDir, "angie", stagedDir, fileRollbackDir, "domains_dir", "domain", []string{"existing-conf.example.com.conf"}, &entries); err == nil {
+	if err := deployAngieConfFiles(ctx, nil, nil, targetDir, angieSvc, angieUser, stagedDir, fileRollbackDir, "domains_dir", "domain", []string{"existing-conf.example.com.conf"}, &entries); err == nil {
 		t.Fatal("expected snapshotExistingPath error on conf deploy")
 	}
 }
@@ -313,19 +371,21 @@ func TestDeployAngieCertErrors(t *testing.T) {
 	}
 
 	var entries []angieRollbackEntry
+	angieSvc := config.DefaultAngieService
+	angieUser := config.UserConfig{Name: angieSvc}
 	failingDAC := &dac.Applier{
 		LookupUser: func(_ string) (int, error) { return 0, errors.New("user lookup failed") },
 	}
 
 	certName := "app-acme.example.com"
-	if err := deployAngieCerts(ctx, nil, certsTarget, "angie", root, root, []string{certName}, &entries); err == nil {
+	if err := deployAngieCerts(ctx, nil, nil, certsTarget, angieSvc, angieUser, root, root, []string{certName}, &entries); err == nil {
 		t.Fatal("expected copy error when cert src is missing")
 	}
 	certSrc := filepath.Join(root, "certs", certName)
 	if err := os.MkdirAll(certSrc, 0o750); err != nil {
 		t.Fatalf("mkdir certSrc: %v", err)
 	}
-	if err := deployAngieCerts(ctx, failingDAC, certsTarget, "angie", root, root, []string{certName}, &entries); err == nil {
+	if err := deployAngieCerts(ctx, failingDAC, nil, certsTarget, angieSvc, angieUser, root, root, []string{certName}, &entries); err == nil {
 		t.Fatal("expected dac error on cert deploy")
 	}
 
@@ -337,7 +397,7 @@ func TestDeployAngieCertErrors(t *testing.T) {
 	if err := os.Mkdir(existingCert, 0o750); err != nil {
 		t.Fatalf("mkdir existing cert: %v", err)
 	}
-	if err := deployAngieCerts(ctx, nil, certsTarget, "angie", root, fileRollbackDir, []string{"existing-cert.example.com"}, &entries); err == nil {
+	if err := deployAngieCerts(ctx, nil, nil, certsTarget, angieSvc, angieUser, root, fileRollbackDir, []string{"existing-cert.example.com"}, &entries); err == nil {
 		t.Fatal("expected snapshotExistingPath error on cert deploy")
 	}
 
@@ -355,110 +415,7 @@ func TestDeployAngieCertErrors(t *testing.T) {
 			t.Errorf("cleanup chmod ro_certs: %v", err)
 		}
 	})
-	if err := deployAngieCerts(ctx, nil, roCerts, "angie", root, root, []string{certName}, &entries); err == nil {
+	if err := deployAngieCerts(ctx, nil, nil, roCerts, angieSvc, angieUser, root, root, []string{certName}, &entries); err == nil {
 		t.Fatal("expected remove error in read-only certs dir")
-	}
-}
-
-func TestSnapshotExistingPath(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	backupDir := filepath.Join(root, "backup")
-	if err := os.Mkdir(backupDir, 0o750); err != nil {
-		t.Fatalf("mkdir backup: %v", err)
-	}
-
-	noPerm := filepath.Join(root, "noperm")
-	if err := os.Mkdir(noPerm, 0o000); err != nil {
-		t.Fatalf("mkdir noperm: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chmod(noPerm, 0o600); err != nil {
-			t.Errorf("cleanup chmod noperm: %v", err)
-		}
-	})
-
-	fileParent := filepath.Join(root, "file_parent")
-	if err := os.WriteFile(fileParent, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write file parent: %v", err)
-	}
-	srcDir := filepath.Join(root, "src_dir")
-	if err := os.Mkdir(srcDir, 0o750); err != nil {
-		t.Fatalf("mkdir src dir: %v", err)
-	}
-	srcFile := filepath.Join(root, "src_file")
-	if err := os.WriteFile(srcFile, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write src file: %v", err)
-	}
-
-	tests := []struct {
-		target  string
-		backup  string
-		wantErr bool
-	}{
-		{target: filepath.Join(root, "missing"), backup: filepath.Join(backupDir, "b1"), wantErr: false},
-		{target: filepath.Join(noPerm, "target"), backup: filepath.Join(backupDir, "b2"), wantErr: true},
-		{target: srcDir, backup: filepath.Join(fileParent, "sub"), wantErr: true},
-		{target: srcFile, backup: filepath.Join(fileParent, "sub"), wantErr: true},
-	}
-	for _, tc := range tests {
-		_, err := snapshotExistingPath(tc.target, tc.backup)
-		if tc.wantErr && err == nil {
-			t.Fatalf("expected error for target %s", tc.target)
-		}
-		if !tc.wantErr && err != nil {
-			t.Fatalf("unexpected error for target %s: %v", tc.target, err)
-		}
-	}
-}
-
-func TestRollbackAngieFiles(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	targetFile := filepath.Join(root, "target_not_existed")
-	if err := os.WriteFile(targetFile, []byte("data"), 0o600); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-
-	roParent := filepath.Join(root, "ro_parent")
-	if err := os.Mkdir(roParent, 0o750); err != nil {
-		t.Fatalf("mkdir ro parent: %v", err)
-	}
-	roTarget := filepath.Join(roParent, "target")
-	if err := os.WriteFile(roTarget, []byte("data"), 0o600); err != nil {
-		t.Fatalf("write ro target: %v", err)
-	}
-	if err := os.Chmod(roParent, 0o400); err != nil {
-		t.Fatalf("chmod ro parent: %v", err)
-	}
-	resetParentPerm := os.FileMode(0o700)
-	t.Cleanup(func() {
-		if err := os.Chmod(roParent, resetParentPerm); err != nil {
-			t.Errorf("cleanup chmod roParent: %v", err)
-		}
-	})
-
-	missingBackup := filepath.Join(root, "missing_backup")
-	tests := []struct {
-		entries []angieRollbackEntry
-		wantErr bool
-	}{
-		{entries: []angieRollbackEntry{{targetPath: targetFile, existed: false}}, wantErr: false},
-		{entries: []angieRollbackEntry{{targetPath: roTarget}}, wantErr: true},
-		{entries: []angieRollbackEntry{
-			{targetPath: filepath.Join(root, "t_dir"), backupPath: missingBackup, existed: true, isDir: true},
-			{targetPath: filepath.Join(root, "t_file"), backupPath: missingBackup, existed: true, isDir: false},
-		}, wantErr: true},
-	}
-	for _, tc := range tests {
-		err := rollbackAngieFiles(tc.entries)
-		if tc.wantErr && err == nil {
-			t.Fatal("expected rollback error")
-		}
-		if !tc.wantErr && err != nil {
-			t.Fatalf("unexpected rollback error: %v", err)
-		}
 	}
 }

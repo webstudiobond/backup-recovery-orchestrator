@@ -20,6 +20,7 @@ const (
 	workDirName           = ".bro-work"
 	stageDirPrefix        = "bro-stage-"
 	restoreDirPrefix      = "bro-restore-"
+	angieRollbackPrefix   = "bro-angie-rollback-"
 	maxWorkSubdirAttempts = 16
 	workSubdirRandBytes   = 8
 	restoreWorkBufferByte = uint64(1 << 30)
@@ -192,7 +193,9 @@ func randomWorkToken() (string, error) {
 }
 
 func isManagedWorkEntry(name string) bool {
-	return strings.HasPrefix(name, stageDirPrefix) || strings.HasPrefix(name, restoreDirPrefix)
+	return strings.HasPrefix(name, stageDirPrefix) ||
+		strings.HasPrefix(name, restoreDirPrefix) ||
+		strings.HasPrefix(name, angieRollbackPrefix)
 }
 
 func (o *Orchestrator) checkRestoreFreeSpace(ctx context.Context, global *config.GlobalConfig, archivePath, workDir, stackDir string) error {

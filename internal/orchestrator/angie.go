@@ -20,13 +20,6 @@ type angieSelection struct {
 	Certs   []string
 }
 
-type angieRollbackEntry struct {
-	targetPath string
-	backupPath string
-	existed    bool
-	isDir      bool
-}
-
 func checkAngieSelectionList(requested, available []string, kind string) error {
 	for _, item := range requested {
 		if !slices.Contains(available, item) {
@@ -68,12 +61,20 @@ func resolveAngieSelection(avail *config.StackAngieConfig, mode string, reqDomai
 	}
 }
 
+func resolveAngieServiceName(globalAngie *config.GlobalAngieConfig) string {
+	if globalAngie.ServiceName != "" {
+		return globalAngie.ServiceName
+	}
+	return config.DefaultAngieService
+}
+
 func deployAngieWithRollback(
 	ctx context.Context,
 	dockerClient *docker.Client,
 	dacApplier *dac.Applier,
 	globalAngie *config.GlobalAngieConfig,
-	unpackDir string,
+	angieStack *config.StackConfig,
+	workDir, unpackDir string,
 	sel angieSelection,
 ) error {
 	if len(sel.Domains) == 0 && len(sel.Streams) == 0 && len(sel.Certs) == 0 {
@@ -86,20 +87,22 @@ func deployAngieWithRollback(
 		return fmt.Errorf("angie compose_file %q not found: %w", globalAngie.ComposeFile, statErr)
 	}
 
-	rollbackDir, mkErr := os.MkdirTemp("", "bro-angie-rollback-*")
+	rollbackDir, mkErr := createWorkSubdir(workDir, angieRollbackPrefix+"*")
 	if mkErr != nil {
 		return fmt.Errorf("create angie rollback directory: %w", mkErr)
 	}
 
+	angieSvc := resolveAngieServiceName(globalAngie)
+	angieUser := resolveAngieDACUser(angieStack, angieSvc)
 	var rollbackEntries []angieRollbackEntry
-	deployErr := applySelectedAngieFiles(ctx, dacApplier, globalAngie, unpackDir, rollbackDir, sel, &rollbackEntries)
+	deployErr := applySelectedAngieFiles(ctx, dacApplier, globalAngie, angieStack, angieSvc, angieUser, unpackDir, rollbackDir, sel, &rollbackEntries)
 	if deployErr == nil {
 		deployErr = dockerClient.CheckAngieConfig(ctx, globalAngie.ComposeFile, globalAngie.ServiceName)
 	}
 
 	var rbErr error
 	if deployErr != nil {
-		rbErr = rollbackAngieFiles(rollbackEntries)
+		rbErr = rollbackAngieFiles(ctx, dacApplier, angieUser, rollbackEntries)
 	}
 	rmErr := os.RemoveAll(rollbackDir)
 	return errors.Join(wrapDeployErr(deployErr), rbErr, wrapRemoveErr(rmErr, rollbackDir))
@@ -116,27 +119,25 @@ func applySelectedAngieFiles(
 	ctx context.Context,
 	dacApplier *dac.Applier,
 	globalAngie *config.GlobalAngieConfig,
+	angieStack *config.StackConfig,
+	angieSvc string,
+	angieUser config.UserConfig,
 	unpackDir, rollbackDir string,
 	sel angieSelection,
 	rollbackEntries *[]angieRollbackEntry,
 ) error {
-	angieSvc := globalAngie.ServiceName
-	if angieSvc == "" {
-		angieSvc = config.DefaultAngieService
-	}
-
 	if len(sel.Domains) > 0 {
-		if err := deployAngieConfFiles(ctx, dacApplier, globalAngie.DomainsDir, angieSvc, filepath.Join(unpackDir, "domains"), rollbackDir, "domains_dir", "domain", sel.Domains, rollbackEntries); err != nil {
+		if err := deployAngieConfFiles(ctx, dacApplier, angieStack, globalAngie.DomainsDir, angieSvc, angieUser, filepath.Join(unpackDir, "domains"), rollbackDir, "domains_dir", "domain", sel.Domains, rollbackEntries); err != nil {
 			return err
 		}
 	}
 	if len(sel.Streams) > 0 {
-		if err := deployAngieConfFiles(ctx, dacApplier, globalAngie.ResolveStreamDir(), angieSvc, filepath.Join(unpackDir, "stream"), rollbackDir, "stream_dir", "stream", sel.Streams, rollbackEntries); err != nil {
+		if err := deployAngieConfFiles(ctx, dacApplier, angieStack, globalAngie.ResolveStreamDir(), angieSvc, angieUser, filepath.Join(unpackDir, "stream"), rollbackDir, "stream_dir", "stream", sel.Streams, rollbackEntries); err != nil {
 			return err
 		}
 	}
 	if len(sel.Certs) > 0 {
-		if err := deployAngieCerts(ctx, dacApplier, globalAngie.CertsDir, angieSvc, unpackDir, rollbackDir, sel.Certs, rollbackEntries); err != nil {
+		if err := deployAngieCerts(ctx, dacApplier, angieStack, globalAngie.CertsDir, angieSvc, angieUser, unpackDir, rollbackDir, sel.Certs, rollbackEntries); err != nil {
 			return err
 		}
 	}
@@ -146,7 +147,10 @@ func applySelectedAngieFiles(
 func deployAngieConfFiles(
 	ctx context.Context,
 	dacApplier *dac.Applier,
-	targetDir, angieSvc, stagedDir, rollbackDir, dirField, kind string,
+	angieStack *config.StackConfig,
+	targetDir, angieSvc string,
+	angieUser config.UserConfig,
+	stagedDir, rollbackDir, dirField, kind string,
 	confs []string,
 	rollbackEntries *[]angieRollbackEntry,
 ) error {
@@ -161,19 +165,20 @@ func deployAngieConfFiles(
 		src := filepath.Join(stagedDir, conf)
 		dst := filepath.Join(targetDir, conf)
 		bak := filepath.Join(rollbackDir, fmt.Sprintf("%s_%d_%s", kind, idx, conf))
+		rules := resolveAngieConfDACRules(angieStack, targetDir, conf, angieSvc)
 
 		entry, snapErr := snapshotExistingPath(dst, bak)
 		if snapErr != nil {
 			return snapErr
 		}
+		entry.baseDir = targetDir
+		entry.dacRules = rules
 		*rollbackEntries = append(*rollbackEntries, entry)
 
 		if copyErr := copyPlainFile(src, dst, 0o640); copyErr != nil {
 			return copyErr
 		}
-		if _, dacErr := dacApplier.ApplyStack(ctx, targetDir, config.UserConfig{Name: angieSvc}, []config.DACRule{
-			{Path: conf, Owner: "root:" + angieSvc, FileMode: "0440"},
-		}, false); dacErr != nil {
+		if _, dacErr := dacApplier.ApplyStack(ctx, targetDir, angieUser, rules, false); dacErr != nil {
 			return fmt.Errorf("apply DAC to angie %s %q: %w", kind, conf, dacErr)
 		}
 	}
@@ -183,7 +188,10 @@ func deployAngieConfFiles(
 func deployAngieCerts(
 	ctx context.Context,
 	dacApplier *dac.Applier,
-	certsDir, angieSvc, unpackDir, rollbackDir string,
+	angieStack *config.StackConfig,
+	certsDir, angieSvc string,
+	angieUser config.UserConfig,
+	unpackDir, rollbackDir string,
 	certs []string,
 	rollbackEntries *[]angieRollbackEntry,
 ) error {
@@ -198,11 +206,14 @@ func deployAngieCerts(
 		srcDir := filepath.Join(unpackDir, "certs", acme)
 		dstDir := filepath.Join(certsDir, acme)
 		bakDir := filepath.Join(rollbackDir, fmt.Sprintf("cert_%d_%s", idx, acme))
+		rules := resolveAngieCertDACRules(angieStack, certsDir, acme, angieSvc)
 
 		entry, snapErr := snapshotExistingPath(dstDir, bakDir)
 		if snapErr != nil {
 			return snapErr
 		}
+		entry.baseDir = certsDir
+		entry.dacRules = rules
 		*rollbackEntries = append(*rollbackEntries, entry)
 
 		if rmErr := os.RemoveAll(dstDir); rmErr != nil {
@@ -211,56 +222,9 @@ func deployAngieCerts(
 		if copyErr := copyDirectoryContents(srcDir, dstDir); copyErr != nil {
 			return copyErr
 		}
-		if _, dacErr := dacApplier.ApplyStack(ctx, certsDir, config.UserConfig{Name: angieSvc}, []config.DACRule{
-			{Path: acme, Owner: angieSvc + ":" + angieSvc, DirMode: "0700", FileMode: "0600", Recursive: true},
-		}, false); dacErr != nil {
+		if _, dacErr := dacApplier.ApplyStack(ctx, certsDir, angieUser, rules, false); dacErr != nil {
 			return fmt.Errorf("apply DAC to angie certs %q: %w", acme, dacErr)
 		}
 	}
 	return nil
-}
-
-func snapshotExistingPath(targetPath, backupPath string) (angieRollbackEntry, error) {
-	info, err := os.Lstat(targetPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return angieRollbackEntry{targetPath: targetPath, existed: false}, nil
-		}
-		return angieRollbackEntry{}, fmt.Errorf("stat existing angie asset %q: %w", targetPath, err)
-	}
-
-	if info.IsDir() {
-		if copyErr := copyDirectoryContents(targetPath, backupPath); copyErr != nil {
-			return angieRollbackEntry{}, fmt.Errorf("snapshot existing angie dir %q: %w", targetPath, copyErr)
-		}
-		return angieRollbackEntry{targetPath: targetPath, backupPath: backupPath, existed: true, isDir: true}, nil
-	}
-
-	if copyErr := copyPlainFile(targetPath, backupPath, info.Mode().Perm()); copyErr != nil {
-		return angieRollbackEntry{}, fmt.Errorf("snapshot existing angie file %q: %w", targetPath, copyErr)
-	}
-	return angieRollbackEntry{targetPath: targetPath, backupPath: backupPath, existed: true, isDir: false}, nil
-}
-
-func rollbackAngieFiles(entries []angieRollbackEntry) error {
-	var errs []error
-	for _, entry := range slices.Backward(entries) {
-		if rmErr := os.RemoveAll(entry.targetPath); rmErr != nil {
-			errs = append(errs, fmt.Errorf("rollback remove %q: %w", entry.targetPath, rmErr))
-			continue
-		}
-		if !entry.existed {
-			continue
-		}
-		if entry.isDir {
-			if cpErr := copyDirectoryContents(entry.backupPath, entry.targetPath); cpErr != nil {
-				errs = append(errs, fmt.Errorf("rollback restore dir %q: %w", entry.targetPath, cpErr))
-			}
-			continue
-		}
-		if cpErr := copyPlainFile(entry.backupPath, entry.targetPath, 0o600); cpErr != nil {
-			errs = append(errs, fmt.Errorf("rollback restore file %q: %w", entry.targetPath, cpErr))
-		}
-	}
-	return errors.Join(errs...)
 }

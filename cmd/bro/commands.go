@@ -172,6 +172,7 @@ func runRestoreCmd(ctx context.Context, args []string, out, errOut io.Writer, ru
 	execFn := func() error {
 		if resErr := orch.Restore(ctx, &bundle.Global, &orchestrator.RestoreOptions{
 			Out:           out,
+			AngieStack:    bundle.AngieStack(),
 			ArchivePath:   archivePath,
 			AngieMode:     *angieMode,
 			AngieDomains:  splitCSV(*angieDomains),

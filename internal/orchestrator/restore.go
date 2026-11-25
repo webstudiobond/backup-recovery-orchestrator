@@ -24,6 +24,7 @@ const (
 // RestoreOptions configures single-stack point-in-time disaster recovery and explicit Angie/host asset selection.
 type RestoreOptions struct {
 	Out           io.Writer
+	AngieStack    *config.StackConfig
 	ArchivePath   string
 	AngieMode     string
 	HostFilesMode string
@@ -36,12 +37,13 @@ type RestoreOptions struct {
 }
 
 type restoreExecutionContext struct {
-	manifest  *archive.Manifest
-	global    *config.GlobalConfig
-	out       io.Writer
-	unpackDir string
-	angieSel  angieSelection
-	hostFiles []string
+	manifest   *archive.Manifest
+	global     *config.GlobalConfig
+	angieStack *config.StackConfig
+	out        io.Writer
+	unpackDir  string
+	angieSel   angieSelection
+	hostFiles  []string
 }
 
 // Restore verifies a single TAR backup container, checks UID/GID safety, and executes declarative restore_steps.
@@ -101,7 +103,16 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 		return fmt.Errorf("create restore unpack directory: %w", mkErr)
 	}
 
-	execErr := o.runRestoreSequence(ctx, global, opts.ArchivePath, unpackDir, out, &manifest, angieSel, selectedHostFiles, steps)
+	rctx := &restoreExecutionContext{
+		manifest:   &manifest,
+		global:     global,
+		angieStack: opts.AngieStack,
+		out:        out,
+		unpackDir:  unpackDir,
+		angieSel:   angieSel,
+		hostFiles:  selectedHostFiles,
+	}
+	execErr := o.runRestoreSequence(ctx, opts.ArchivePath, rctx, steps)
 	rmErr := os.RemoveAll(unpackDir)
 	return errors.Join(execErr, wrapRemoveErr(rmErr, unpackDir))
 }
@@ -122,32 +133,19 @@ func (o *Orchestrator) prepareRestoreWorkDir(ctx context.Context, global *config
 
 func (o *Orchestrator) runRestoreSequence(
 	ctx context.Context,
-	global *config.GlobalConfig,
-	archivePath, unpackDir string,
-	out io.Writer,
-	manifest *archive.Manifest,
-	angieSel angieSelection,
-	selectedHostFiles []string,
+	archivePath string,
+	rctx *restoreExecutionContext,
 	steps []config.RestoreStep,
 ) error {
-	limits := archive.ContainerLimitsFromGB(global.MaxArchiveGB)
-	if err := archive.UnpackContainerWithLimits(ctx, archivePath, unpackDir, limits); err != nil {
+	limits := archive.ContainerLimitsFromGB(rctx.global.MaxArchiveGB)
+	if err := archive.UnpackContainerWithLimits(ctx, archivePath, rctx.unpackDir, limits); err != nil {
 		return fmt.Errorf("unpack container %q: %w", archivePath, err)
-	}
-
-	rctx := restoreExecutionContext{
-		manifest:  manifest,
-		global:    global,
-		out:       out,
-		unpackDir: unpackDir,
-		angieSel:  angieSel,
-		hostFiles: selectedHostFiles,
 	}
 
 	for idx := range steps {
 		step := &steps[idx]
-		writeLine(out, fmt.Sprintf("[restore %d/%d] action=%s", idx+1, len(steps), step.Action))
-		if err := o.executeRestoreStep(ctx, &rctx, step); err != nil {
+		writeLine(rctx.out, fmt.Sprintf("[restore %d/%d] action=%s", idx+1, len(steps), step.Action))
+		if err := o.executeRestoreStep(ctx, rctx, step); err != nil {
 			return fmt.Errorf("restore step[%d] (%s): %w", idx, step.Action, err)
 		}
 	}
@@ -188,7 +186,7 @@ func (o *Orchestrator) executeDataOrInfraStep(ctx context.Context, rctx *restore
 	case "move_contents":
 		return true, moveStackContents(ctx, rctx.manifest.StackDir, step.From, step.To)
 	case "deploy_angie":
-		return true, deployAngieWithRollback(ctx, o.Docker, o.DAC, &rctx.global.Angie, rctx.unpackDir, rctx.angieSel)
+		return true, deployAngieWithRollback(ctx, o.Docker, o.DAC, &rctx.global.Angie, rctx.angieStack, resolveRestoreWorkDir(rctx.global), rctx.unpackDir, rctx.angieSel)
 	case "db_import":
 		return true, o.restoreDatabaseStep(ctx, rctx, step.DatabaseID)
 	default:

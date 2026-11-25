@@ -205,13 +205,13 @@ func TestRunRestoreSequenceAndErrors(t *testing.T) {
 
 	unpackErr := orch.runRestoreSequence(
 		ctx,
-		&bundle.Global,
 		filepath.Join(root, "missing.tar"),
-		t.TempDir(),
-		io.Discard,
-		manifest,
-		angieSelection{},
-		nil,
+		&restoreExecutionContext{
+			manifest:  manifest,
+			global:    &bundle.Global,
+			out:       io.Discard,
+			unpackDir: t.TempDir(),
+		},
 		nil,
 	)
 	if unpackErr == nil || !strings.Contains(unpackErr.Error(), "unpack container") {
@@ -225,13 +225,13 @@ func TestRunRestoreSequenceAndErrors(t *testing.T) {
 
 	stepErr := orch.runRestoreSequence(
 		ctx,
-		&bundle.Global,
 		archivePath,
-		t.TempDir(),
-		io.Discard,
-		manifest,
-		angieSelection{},
-		nil,
+		&restoreExecutionContext{
+			manifest:  manifest,
+			global:    &bundle.Global,
+			out:       io.Discard,
+			unpackDir: t.TempDir(),
+		},
 		[]config.RestoreStep{{Action: "unknown_step_action"}},
 	)
 	if stepErr == nil || !strings.Contains(stepErr.Error(), "restore step[0]") {

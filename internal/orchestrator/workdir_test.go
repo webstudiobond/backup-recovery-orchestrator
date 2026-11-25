@@ -128,8 +128,9 @@ func TestWorkDirEnsurePruneAndCreate(t *testing.T) {
 	}
 
 	staleRestore := filepath.Join(workDir, restoreDirPrefix+"old")
+	staleAngie := filepath.Join(workDir, angieRollbackPrefix+"old")
 	keepDir := filepath.Join(workDir, "unrelated_keep")
-	for _, d := range []string{staleRestore, keepDir} {
+	for _, d := range []string{staleRestore, staleAngie, keepDir} {
 		if mkErr := os.MkdirAll(d, 0o700); mkErr != nil {
 			t.Fatalf("mkdir %q: %v", d, mkErr)
 		}
@@ -138,7 +139,7 @@ func TestWorkDirEnsurePruneAndCreate(t *testing.T) {
 	if pruneErr := pruneStaleWorkDirs(workDir); pruneErr != nil {
 		t.Fatalf("pruneStaleWorkDirs failed: %v", pruneErr)
 	}
-	for _, removed := range []string{subDir, literalDir, staleRestore} {
+	for _, removed := range []string{subDir, literalDir, staleRestore, staleAngie} {
 		if _, statErr := os.Stat(removed); !os.IsNotExist(statErr) {
 			t.Fatalf("expected stale work entry %q to be removed, statErr=%v", removed, statErr)
 		}
