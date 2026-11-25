@@ -405,7 +405,7 @@ func TestStageStackBackupStepsAndErrors(t *testing.T) {
 			stack.Hooks.PreSnapshot = []config.HookStep{{Command: []string{"fail-snap"}}}
 		}},
 		{wantErr: "create snapshot", setup: func() { stack.Hooks.PreSnapshot = nil; runner.failMatch = "--snapshot" }},
-		{wantErr: "archive host_files", setup: func() { runner.failMatch = "tar -capf" }},
+		{wantErr: "archive host_files", setup: func() { runner.failMatch = "tar -cpf -" }},
 		{wantErr: "stage angie assets", setup: func() {
 			runner.failMatch = ""
 			bundle.Global.Angie.DomainsDir = filepath.Join(root, "missing", "domains")
@@ -480,7 +480,7 @@ func TestDumpAllDatabasesAndSnapshotDetails(t *testing.T) {
 	}
 	for _, tc := range cases {
 		tc.setup()
-		if err := orch.snapshotAndArchiveFiles(ctx, stack, filesOut); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+		if _, err := orch.snapshotAndArchiveFiles(ctx, stack, filesOut); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 			t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 		}
 	}

@@ -68,21 +68,71 @@ var (
 	closeFile = defaultCloseFile
 )
 
-// DumpToFile exports a database stream and compresses it on the fly with zstd into outPath.
-func (e *Engine) DumpToFile(ctx context.Context, composeFile string, db *config.DatabaseConfig, zstdLevel int, outPath string) error {
+type countingWriter struct {
+	n int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	return len(p), nil
+}
+
+type limitedDumpReader struct {
+	r         io.Reader
+	remaining int64
+	limit     int64
+}
+
+func (l *limitedDumpReader) Read(p []byte) (int, error) {
+	if l.remaining <= 0 {
+		var probe [1]byte
+		n, err := l.r.Read(probe[:])
+		if n > 0 {
+			return 0, fmt.Errorf("decompressed database dump exceeds maximum allowed size of %d bytes", l.limit)
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return 0, fmt.Errorf("read decompressed database dump tail: %w", err)
+		}
+		return 0, io.EOF
+	}
+	if int64(len(p)) > l.remaining {
+		p = p[:l.remaining]
+	}
+	n, err := l.r.Read(p)
+	l.remaining -= int64(n)
+	if errors.Is(err, io.EOF) {
+		return n, io.EOF
+	}
+	if err != nil {
+		return n, fmt.Errorf("read decompressed database dump: %w", err)
+	}
+	return n, nil
+}
+
+func effectiveRestoreLimit(maxBytes int64) int64 {
+	if maxBytes > 0 {
+		return maxBytes
+	}
+	return int64(config.DefaultMaxArchiveGB) << 30
+}
+
+// DumpToFile exports a database stream, compresses it on the fly with zstd into outPath,
+// and returns the uncompressed SQL dump byte count.
+func (e *Engine) DumpToFile(ctx context.Context, composeFile string, db *config.DatabaseConfig, zstdLevel int, outPath string) (int64, error) {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context canceled before dumping database %q: %w", db.ID, err)
+		return 0, fmt.Errorf("context canceled before dumping database %q: %w", db.ID, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
-		return fmt.Errorf("create database staging directory: %w", err)
+		return 0, fmt.Errorf("create database staging directory: %w", err)
 	}
 
 	outFile, err := os.OpenFile(filepath.Clean(outPath), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return fmt.Errorf("create database dump file %q: %w", outPath, err)
+		return 0, fmt.Errorf("create database dump file %q: %w", outPath, err)
 	}
 
 	pr, pw := newPipe()
+	cw := &countingWriter{}
 	var (
 		dumpErr error
 		zstdErr error
@@ -92,7 +142,7 @@ func (e *Engine) DumpToFile(ctx context.Context, composeFile string, db *config.
 
 	go func() {
 		defer wg.Done()
-		dumpErr = e.dumpStream(ctx, composeFile, db, pw)
+		dumpErr = e.dumpStream(ctx, composeFile, db, io.MultiWriter(pw, cw))
 		if closeErr := pw.CloseWithError(dumpErr); closeErr != nil && dumpErr == nil {
 			dumpErr = closeErr
 		}
@@ -119,23 +169,34 @@ func (e *Engine) DumpToFile(ctx context.Context, composeFile string, db *config.
 
 	if combinedErr := errors.Join(dumpErr, zstdErr, closeFileErr); combinedErr != nil {
 		if rmErr := os.Remove(outPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			return errors.Join(combinedErr, fmt.Errorf("remove partial dump %q: %w", outPath, rmErr))
+			return 0, errors.Join(combinedErr, fmt.Errorf("remove partial dump %q: %w", outPath, rmErr))
 		}
-		return combinedErr
+		return 0, combinedErr
 	}
 
 	info, statErr := os.Stat(outPath)
 	if statErr != nil {
-		return fmt.Errorf("stat database dump %q: %w", outPath, statErr)
+		return 0, fmt.Errorf("stat database dump %q: %w", outPath, statErr)
 	}
 	if info.Size() == 0 {
-		return fmt.Errorf("database %q produced an empty dump archive %q", db.ID, outPath)
+		return 0, fmt.Errorf("database %q produced an empty dump archive %q", db.ID, outPath)
 	}
-	return nil
+	return cw.n, nil
 }
 
 // RestoreFromFile decompresses a zstd database archive and streams it directly into the target container.
 func (e *Engine) RestoreFromFile(ctx context.Context, composeFile string, db *config.DatabaseConfig, dumpPath string) error {
+	return e.RestoreFromFileWithLimit(ctx, composeFile, db, dumpPath, 0)
+}
+
+// RestoreFromFileWithLimit decompresses a zstd database archive up to maxBytes uncompressed and streams it to the container.
+func (e *Engine) RestoreFromFileWithLimit(
+	ctx context.Context,
+	composeFile string,
+	db *config.DatabaseConfig,
+	dumpPath string,
+	maxBytes int64,
+) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context canceled before restoring database %q: %w", db.ID, err)
 	}
@@ -145,6 +206,10 @@ func (e *Engine) RestoreFromFile(ctx context.Context, composeFile string, db *co
 		return fmt.Errorf("open database dump %q: %w", dumpPath, err)
 	}
 
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+
+	limit := effectiveRestoreLimit(maxBytes)
 	pr, pw := newPipe()
 	var (
 		zstdErr   error
@@ -155,7 +220,7 @@ func (e *Engine) RestoreFromFile(ctx context.Context, composeFile string, db *co
 
 	go func() {
 		defer wg.Done()
-		zstdErr = e.Runner.Run(ctx, &cmdexec.Spec{
+		zstdErr = e.Runner.Run(streamCtx, &cmdexec.Spec{
 			Name:   "zstd",
 			Args:   []string{"-dc"},
 			Stdin:  inFile,
@@ -168,7 +233,11 @@ func (e *Engine) RestoreFromFile(ctx context.Context, composeFile string, db *co
 
 	go func() {
 		defer wg.Done()
-		importErr = e.importStream(ctx, composeFile, db, pr)
+		bounded := &limitedDumpReader{r: pr, remaining: limit, limit: limit}
+		importErr = e.importStream(streamCtx, composeFile, db, bounded)
+		if importErr != nil {
+			cancelStream()
+		}
 		if closeErr := pr.CloseWithError(importErr); closeErr != nil && importErr == nil {
 			importErr = closeErr
 		}

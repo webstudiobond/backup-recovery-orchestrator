@@ -23,7 +23,8 @@ func (o *Orchestrator) restoreHostFiles(ctx context.Context, rctx *restoreExecut
 		return errors.New("manifest missing host_files_archive")
 	}
 	hostTar := filepath.Join(rctx.unpackDir, rctx.manifest.HostFilesArchive)
-	if err := o.Archive.ExtractHostFiles(ctx, hostTar, rctx.hostFiles); err != nil {
+	limit := effectiveInnerExtractLimit(rctx.manifest.HostFilesUncompressedBytes, rctx.global)
+	if err := o.Archive.ExtractHostFilesWithLimits(ctx, hostTar, rctx.hostFiles, limit); err != nil {
 		return fmt.Errorf("extract host_files: %w", err)
 	}
 
@@ -169,7 +170,8 @@ func (o *Orchestrator) restoreSingleManifestDB(ctx context.Context, rctx *restor
 		Secrets: dbMeta.Secrets,
 	}
 	dumpPath := filepath.Join(rctx.unpackDir, filepath.FromSlash(dbMeta.ArtifactPath))
-	if err := o.Database.RestoreFromFile(ctx, rctx.manifest.ComposeFile, &dbCfg, dumpPath); err != nil {
+	limit := effectiveInnerExtractLimit(dbMeta.UncompressedBytes, rctx.global)
+	if err := o.Database.RestoreFromFileWithLimit(ctx, rctx.manifest.ComposeFile, &dbCfg, dumpPath, limit); err != nil {
 		return fmt.Errorf("import database %q: %w", dbMeta.ID, err)
 	}
 	return nil

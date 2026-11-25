@@ -1,9 +1,11 @@
 package orchestrator
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -42,10 +44,13 @@ type fakeOrchRunner struct {
 }
 
 func (f *fakeOrchRunner) Run(_ context.Context, spec *cmdexec.Spec) error {
+	var stdinData []byte
 	if spec.Stdin != nil {
-		if _, err := new(bytes.Buffer).ReadFrom(spec.Stdin); err != nil {
+		data, err := io.ReadAll(spec.Stdin)
+		if err != nil {
 			return err
 		}
+		stdinData = data
 	}
 
 	f.mu.Lock()
@@ -72,37 +77,49 @@ func (f *fakeOrchRunner) Run(_ context.Context, spec *cmdexec.Spec) error {
 			return err
 		}
 	}
-	return simulateTarAndStdout(spec)
+	return simulateOrchStdout(spec, stdinData)
 }
 
-func simulateTarAndStdout(spec *cmdexec.Spec) error {
-	if spec.Name == "tar" {
-		if err := simulateTarAction(spec.Args); err != nil {
+func simulateOrchStdout(spec *cmdexec.Spec, stdinData []byte) error {
+	if spec.Stdout == nil {
+		return nil
+	}
+	switch spec.Name {
+	case "tar":
+		tarBytes, err := makeFakeOrchTarBytes()
+		if err != nil {
 			return err
 		}
+		_, err = spec.Stdout.Write(tarBytes)
+		return err
+	case "zstd":
+		_, err := spec.Stdout.Write(stdinData)
+		return err
+	default:
+		_, err := spec.Stdout.Write([]byte("SQL DUMP"))
+		return err
 	}
-	if spec.Stdout != nil {
-		if _, err := spec.Stdout.Write([]byte("SQL DUMP")); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
-func simulateTarAction(args []string) error {
-	for i, arg := range args {
-		if arg == "-capf" && i+1 < len(args) {
-			return os.WriteFile(args[i+1], []byte("zst-archive"), 0o600)
-		}
-		if arg == "-xpf" && i+3 < len(args) && args[i+2] == "-C" {
-			if args[i+3] == "/" {
-				return nil
-			}
-			targetCompose := filepath.Join(args[i+3], "docker-compose.yaml")
-			return os.WriteFile(targetCompose, []byte("services: {}\n"), 0o600)
-		}
+func makeFakeOrchTarBytes() ([]byte, error) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	content := []byte("services: {}\n")
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     "docker-compose.yaml",
+		Mode:     0o600,
+		Typeflag: tar.TypeReg,
+		Size:     int64(len(content)),
+	}); err != nil {
+		return nil, err
 	}
-	return nil
+	if _, err := tw.Write(content); err != nil {
+		return nil, err
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (f *fakeOrchRunner) Output(_ context.Context, spec *cmdexec.Spec) ([]byte, error) {
@@ -317,9 +334,12 @@ func assertBashContainerLayout(ctx context.Context, t *testing.T, archivePath, s
 	if verified.FilesArchive != wantFiles {
 		t.Fatalf("expected files_archive %q, got %q", wantFiles, verified.FilesArchive)
 	}
+	if verified.FilesUncompressedBytes <= 0 || verified.HostFilesUncompressedBytes <= 0 {
+		t.Fatalf("expected positive uncompressed archive sizes, got files=%d host=%d", verified.FilesUncompressedBytes, verified.HostFilesUncompressedBytes)
+	}
 	wantDB := stackName + "_db_2026-11-16_15-00-00.sql.zst"
-	if len(verified.Databases) != 1 || verified.Databases[0].ArtifactPath != wantDB {
-		t.Fatalf("expected single db artifact %q, got %+v", wantDB, verified.Databases)
+	if len(verified.Databases) != 1 || verified.Databases[0].ArtifactPath != wantDB || verified.Databases[0].UncompressedBytes <= 0 {
+		t.Fatalf("expected single db artifact %q with uncompressed bytes, got %+v", wantDB, verified.Databases)
 	}
 	if _, ok := verified.Artifacts["domains/alpha.example.com.conf"]; !ok {
 		t.Fatalf("expected domains/alpha.example.com.conf in artifacts, got %+v", verified.Artifacts)

@@ -428,31 +428,41 @@ func TestCheckRestoreFreeSpaceSeparateFS(t *testing.T) {
 		}
 		return 10 << 30, nil
 	}
-	if err := orch.checkRestoreFreeSpace(context.Background(), global, archivePath, customWork, stackDir); err == nil || !strings.Contains(err.Error(), "check free space for stack_dir") {
+	if err := orch.checkRestoreFreeSpace(context.Background(), global, archivePath, customWork, stackDir, 0); err == nil || !strings.Contains(err.Error(), "check free space for stack_dir") {
 		t.Fatalf("expected stack_dir free-space error, got %v", err)
+	}
+
+	orch.LVM.AvailBytesFn = func(path string) (uint64, error) {
+		if path == stackDir {
+			return 2048, nil
+		}
+		return 5 << 30, nil
+	}
+	if err := orch.checkRestoreFreeSpace(context.Background(), global, archivePath, customWork, stackDir, 4096); err == nil || !strings.Contains(err.Error(), "check free space for stack_dir") {
+		t.Fatalf("expected stack_dir uncompressed free-space error, got %v", err)
 	}
 
 	orch.LVM.AvailBytesFn = func(string) (uint64, error) {
 		return 5 << 30, nil
 	}
-	if err := orch.checkRestoreFreeSpace(context.Background(), global, archivePath, defaultWork, stackDir); err != nil {
+	if err := orch.checkRestoreFreeSpace(context.Background(), global, archivePath, defaultWork, stackDir, 0); err != nil {
 		t.Fatalf("expected small archive restore to succeed below min_free_gb, got %v", err)
 	}
 
 	orch.LVM.AvailBytesFn = func(string) (uint64, error) {
 		return 512 << 20, nil
 	}
-	if err := orch.checkRestoreFreeSpace(context.Background(), global, archivePath, defaultWork, stackDir); err == nil || !strings.Contains(err.Error(), "check free space for restore work directory") {
+	if err := orch.checkRestoreFreeSpace(context.Background(), global, archivePath, defaultWork, stackDir, 0); err == nil || !strings.Contains(err.Error(), "check free space for restore work directory") {
 		t.Fatalf("expected work directory buffer error, got %v", err)
 	}
 
 	zeroMinGlobal := &config.GlobalConfig{BackupRoot: backupRoot, MinFreeGB: 0}
-	if err := orch.checkRestoreFreeSpace(context.Background(), zeroMinGlobal, archivePath, defaultWork, stackDir); err != nil {
+	if err := orch.checkRestoreFreeSpace(context.Background(), zeroMinGlobal, archivePath, defaultWork, stackDir, 0); err != nil {
 		t.Fatalf("expected zero min_free_gb restore to succeed without buffer, got %v", err)
 	}
 
 	osStat = mockFailingOSStat
-	if err := orch.checkRestoreFreeSpace(context.Background(), global, archivePath, customWork, stackDir); err == nil || !strings.Contains(err.Error(), "stat archive") {
+	if err := orch.checkRestoreFreeSpace(context.Background(), global, archivePath, customWork, stackDir, 0); err == nil || !strings.Contains(err.Error(), "stat archive") {
 		t.Fatalf("expected stat archive error, got %v", err)
 	}
 }
@@ -482,20 +492,20 @@ func TestCheckRestoreFreeSpaceSharedFSAndHelpers(t *testing.T) {
 	orch.LVM.AvailBytesFn = func(string) (uint64, error) {
 		return 12000, nil
 	}
-	if err := orch.checkRestoreFreeSpace(context.Background(), zeroMinGlobal, largeArchive, customWork, stackDir); err == nil || !strings.Contains(err.Error(), "check free space for shared restore filesystem") {
+	if err := orch.checkRestoreFreeSpace(context.Background(), zeroMinGlobal, largeArchive, customWork, stackDir, 0); err == nil || !strings.Contains(err.Error(), "check free space for shared restore filesystem") {
 		t.Fatalf("expected shared filesystem error when free < 2*archive, got %v", err)
 	}
 
 	orch.LVM.AvailBytesFn = func(string) (uint64, error) {
 		return 20000, nil
 	}
-	if err := orch.checkRestoreFreeSpace(context.Background(), zeroMinGlobal, largeArchive, customWork, stackDir); err != nil {
+	if err := orch.checkRestoreFreeSpace(context.Background(), zeroMinGlobal, largeArchive, customWork, stackDir, 0); err != nil {
 		t.Fatalf("expected shared filesystem check to pass when free >= 2*archive, got %v", err)
 	}
 
 	osStat = mockMaxInt64FileStat
 	overflowGlobal := &config.GlobalConfig{BackupRoot: backupRoot, MinFreeGB: 15}
-	if err := orch.checkRestoreFreeSpace(context.Background(), overflowGlobal, largeArchive, backupWorkDir(backupRoot), stackDir); err == nil || !strings.Contains(err.Error(), "overflows uint64") {
+	if err := orch.checkRestoreFreeSpace(context.Background(), overflowGlobal, largeArchive, backupWorkDir(backupRoot), stackDir, 0); err == nil || !strings.Contains(err.Error(), "overflows uint64") {
 		t.Fatalf("expected combined uint64 overflow error, got %v", err)
 	}
 	osStat = origStat

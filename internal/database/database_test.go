@@ -80,8 +80,12 @@ func TestDumpAndRestoreDrivers(t *testing.T) {
 			fileName := dbCfg.ID + ".sql.zst"
 			outPath := filepath.Join(outDir, fileName)
 
-			if err := engine.DumpToFile(ctx, composeFile, &dbCfg, 6, outPath); err != nil {
+			n, err := engine.DumpToFile(ctx, composeFile, &dbCfg, 6, outPath)
+			if err != nil {
 				t.Fatalf("DumpToFile error: %v", err)
+			}
+			if n != int64(len("CREATE TABLE t(id int);")) {
+				t.Fatalf("DumpToFile uncompressed bytes = %d, want %d", n, len("CREATE TABLE t(id int);"))
 			}
 
 			dirRoot, openErr := os.OpenRoot(outDir)
@@ -107,13 +111,35 @@ func TestDumpAndRestoreDrivers(t *testing.T) {
 			}
 
 			runner.calls = nil
-			if err := engine.RestoreFromFile(ctx, composeFile, &dbCfg, outPath); err != nil {
-				t.Fatalf("RestoreFromFile error: %v", err)
-			}
-			if !containsArgFragment(runner.calls, tc.wantImportTerm) {
-				t.Fatalf("expected restore call containing %q, calls=%+v", tc.wantImportTerm, runner.calls)
-			}
+			assertDriverRestoreWithLimit(ctx, t, engine, runner, composeFile, &dbCfg, outPath, tc.wantImportTerm, int64(len(rawDump)))
 		})
+	}
+}
+
+func assertDriverRestoreWithLimit(
+	ctx context.Context,
+	t *testing.T,
+	engine *Engine,
+	runner *fakeDBRunner,
+	composeFile string,
+	dbCfg *config.DatabaseConfig,
+	outPath string,
+	wantImportTerm string,
+	rawLen int64,
+) {
+	t.Helper()
+
+	if err := engine.RestoreFromFile(ctx, composeFile, dbCfg, outPath); err != nil {
+		t.Fatalf("RestoreFromFile error: %v", err)
+	}
+	if !containsArgFragment(runner.calls, wantImportTerm) {
+		t.Fatalf("expected restore call containing %q, calls=%+v", wantImportTerm, runner.calls)
+	}
+	if err := engine.RestoreFromFileWithLimit(ctx, composeFile, dbCfg, outPath, rawLen); err != nil {
+		t.Fatalf("RestoreFromFileWithLimit exact error: %v", err)
+	}
+	if err := engine.RestoreFromFileWithLimit(ctx, composeFile, dbCfg, outPath, 4); err == nil || !strings.Contains(err.Error(), "exceeds maximum allowed size") {
+		t.Fatalf("expected size limit error, got %v", err)
 	}
 }
 
@@ -170,7 +196,7 @@ func TestDumpAndRestoreErrors(t *testing.T) {
 				}
 				err = engine.RestoreFromFile(tc.ctx, composeFile, &db, target)
 			} else {
-				err = engine.DumpToFile(tc.ctx, composeFile, &db, 6, target)
+				_, err = engine.DumpToFile(tc.ctx, composeFile, &db, 6, target)
 			}
 
 			if err == nil || !strings.Contains(err.Error(), tc.errContains) {
@@ -197,12 +223,12 @@ func TestDumpToFileOSFailures(t *testing.T) {
 		t.Fatalf("write temp file: %v", err)
 	}
 	invalidPath := filepath.Join(tmpFile, "sub", "dump.sql.zst")
-	if err := engine.DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, invalidPath); err == nil || !strings.Contains(err.Error(), "create database staging directory") {
+	if _, err := engine.DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, invalidPath); err == nil || !strings.Contains(err.Error(), "create database staging directory") {
 		t.Fatalf("expected staging directory creation error, got %v", err)
 	}
 
 	existingDir := t.TempDir()
-	if err := engine.DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, existingDir); err == nil || !strings.Contains(err.Error(), "create database dump file") {
+	if _, err := engine.DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, existingDir); err == nil || !strings.Contains(err.Error(), "create database dump file") {
 		t.Fatalf("expected file open error, got %v", err)
 	}
 
@@ -224,7 +250,7 @@ func TestDumpToFileOSFailures(t *testing.T) {
 		},
 		failAll: true,
 	}
-	err := NewEngine(removeFailRunner, docker.NewClient(removeFailRunner)).DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, partialTarget)
+	_, err := NewEngine(removeFailRunner, docker.NewClient(removeFailRunner)).DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, partialTarget)
 	if err == nil || !strings.Contains(err.Error(), "remove partial dump") {
 		t.Fatalf("expected remove partial dump error, got %v", err)
 	}
@@ -239,7 +265,7 @@ func TestDumpToFileOSFailures(t *testing.T) {
 			}
 		},
 	}
-	err = NewEngine(statFailRunner, docker.NewClient(statFailRunner)).DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, statTarget)
+	_, err = NewEngine(statFailRunner, docker.NewClient(statFailRunner)).DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, statTarget)
 	if err == nil || !strings.Contains(err.Error(), "stat database dump") {
 		t.Fatalf("expected stat database dump error, got %v", err)
 	}
@@ -436,7 +462,7 @@ func TestPipeAndFileCloseErrors(t *testing.T) {
 				}
 				err = engine.RestoreFromFile(context.Background(), "/compose.yaml", dbCfg, target)
 			} else {
-				err = engine.DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, target)
+				_, err = engine.DumpToFile(context.Background(), "/compose.yaml", dbCfg, 6, target)
 			}
 
 			if err == nil || !strings.Contains(err.Error(), tc.errContains) {
@@ -454,5 +480,27 @@ func TestPipeAndFileCloseErrors(t *testing.T) {
 	}
 	if err := defaultCloseFile(closedFile); err == nil {
 		t.Fatalf("expected error closing already closed file")
+	}
+}
+
+type failingDumpReader struct {
+	err error
+}
+
+func (f *failingDumpReader) Read([]byte) (int, error) {
+	return 0, f.err
+}
+
+func TestLimitedDumpReaderEdges(t *testing.T) {
+	t.Parallel()
+
+	buf := make([]byte, 8)
+	failTail := &limitedDumpReader{r: &failingDumpReader{err: errors.New("tail failure")}, remaining: 0, limit: 4}
+	if _, err := failTail.Read(buf); err == nil || !strings.Contains(err.Error(), "read decompressed database dump tail") {
+		t.Fatalf("expected tail error, got %v", err)
+	}
+	failMid := &limitedDumpReader{r: &failingDumpReader{err: errors.New("mid failure")}, remaining: 4, limit: 4}
+	if _, err := failMid.Read(buf); err == nil || !strings.Contains(err.Error(), "read decompressed database dump") {
+		t.Fatalf("expected mid read error, got %v", err)
 	}
 }

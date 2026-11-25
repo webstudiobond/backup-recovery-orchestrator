@@ -93,7 +93,7 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 		return nil
 	}
 
-	workDir, workErr := o.prepareRestoreWorkDir(ctx, global, opts.ArchivePath, manifest.StackDir)
+	workDir, workErr := o.prepareRestoreWorkDir(ctx, global, opts.ArchivePath, manifest.StackDir, manifest.FilesUncompressedBytes)
 	if workErr != nil {
 		return workErr
 	}
@@ -117,7 +117,13 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 	return errors.Join(execErr, wrapRemoveErr(rmErr, unpackDir))
 }
 
-func (o *Orchestrator) prepareRestoreWorkDir(ctx context.Context, global *config.GlobalConfig, archivePath, stackDir string) (string, error) {
+func (o *Orchestrator) prepareRestoreWorkDir(
+	ctx context.Context,
+	global *config.GlobalConfig,
+	archivePath string,
+	stackDir string,
+	filesUncompressedBytes int64,
+) (string, error) {
 	workDir := resolveRestoreWorkDir(global)
 	if err := validateRestoreWorkDirSeparation(workDir, stackDir); err != nil {
 		return "", err
@@ -125,7 +131,7 @@ func (o *Orchestrator) prepareRestoreWorkDir(ctx context.Context, global *config
 	if err := pruneStaleWorkDirs(workDir); err != nil {
 		return "", fmt.Errorf("prepare restore work directory: %w", err)
 	}
-	if err := o.checkRestoreFreeSpace(ctx, global, archivePath, workDir, stackDir); err != nil {
+	if err := o.checkRestoreFreeSpace(ctx, global, archivePath, workDir, stackDir, filesUncompressedBytes); err != nil {
 		return "", err
 	}
 	return workDir, nil
@@ -169,7 +175,8 @@ func (o *Orchestrator) executeDataOrInfraStep(ctx context.Context, rctx *restore
 			return true, errors.New("manifest missing files_archive")
 		}
 		filesTar := filepath.Join(rctx.unpackDir, rctx.manifest.FilesArchive)
-		if err := o.Archive.ExtractStackFilesCleanSlate(ctx, filesTar, rctx.manifest.StackDir); err != nil {
+		limit := effectiveInnerExtractLimit(rctx.manifest.FilesUncompressedBytes, rctx.global)
+		if err := o.Archive.ExtractStackFilesCleanSlateWithLimits(ctx, filesTar, rctx.manifest.StackDir, limit); err != nil {
 			return true, fmt.Errorf("extract stack files: %w", err)
 		}
 		return true, nil
@@ -293,4 +300,15 @@ func printRestoreDryRun(
 		step := &steps[idx]
 		writeLine(out, fmt.Sprintf("    %d. %s (service=%s services=%v db=%s)", idx+1, step.Action, step.Service, step.Services, step.DatabaseID))
 	}
+}
+
+func effectiveInnerExtractLimit(declaredBytes int64, global *config.GlobalConfig) int64 {
+	if declaredBytes > 0 {
+		return declaredBytes
+	}
+	var maxArchiveGB uint64
+	if global != nil {
+		maxArchiveGB = global.MaxArchiveGB
+	}
+	return archive.ContainerLimitsFromGB(maxArchiveGB).MaxBytes
 }

@@ -109,19 +109,20 @@ func (o *Orchestrator) buildSelfBackupContainer(
 
 	hostRel := archive.StackHostFilesArchiveName(config.ReservedSelfBackupName, stamp)
 	hostOut := filepath.Join(stagingDir, hostRel)
-	records, archErr := o.Archive.ArchiveHostFiles(ctx, items, global.ZstdLevel, hostOut)
+	records, hostUncompressed, archErr := o.Archive.ArchiveHostFiles(ctx, items, global.ZstdLevel, hostOut)
 	if archErr != nil {
 		rmErr := os.RemoveAll(stagingDir)
 		return "", "", errors.Join(fmt.Errorf("archive selfbackup paths: %w", archErr), wrapRemoveErr(rmErr, stagingDir))
 	}
 
 	manifest := archive.Manifest{
-		SchemaVersion:    archive.ManifestSchemaVersion,
-		Kind:             archive.SelfBackupKind,
-		CreatedAt:        backupNow.Format(time.RFC3339),
-		StackName:        config.ReservedSelfBackupName,
-		HostFilesArchive: hostRel,
-		HostFiles:        records,
+		SchemaVersion:              archive.ManifestSchemaVersion,
+		Kind:                       archive.SelfBackupKind,
+		CreatedAt:                  backupNow.Format(time.RFC3339),
+		StackName:                  config.ReservedSelfBackupName,
+		HostFilesArchive:           hostRel,
+		HostFilesUncompressedBytes: hostUncompressed,
+		HostFiles:                  records,
 	}
 
 	archiveName := fmt.Sprintf("%s_%s.tar", config.ReservedSelfBackupName, stamp)

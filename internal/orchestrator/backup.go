@@ -152,13 +152,14 @@ func (o *Orchestrator) stageStackBackup(
 
 	filesRel := archive.StackFilesArchiveName(stack.Name, stamp)
 	filesOut := filepath.Join(stagingDir, filesRel)
-	if snapErr := o.snapshotAndArchiveFiles(ctx, stack, filesOut); snapErr != nil {
+	filesUncompressed, snapErr := o.snapshotAndArchiveFiles(ctx, stack, filesOut)
+	if snapErr != nil {
 		return archive.Manifest{}, snapErr
 	}
 
 	hostRel := archive.StackHostFilesArchiveName(stack.Name, stamp)
 	hostOut := filepath.Join(stagingDir, hostRel)
-	hostRecords, hostErr := o.Archive.ArchiveHostFiles(ctx, stack.HostFiles, stack.ZstdLevel, hostOut)
+	hostRecords, hostUncompressed, hostErr := o.Archive.ArchiveHostFiles(ctx, stack.HostFiles, stack.ZstdLevel, hostOut)
 	if hostErr != nil {
 		return archive.Manifest{}, fmt.Errorf("archive host_files: %w", hostErr)
 	}
@@ -171,19 +172,21 @@ func (o *Orchestrator) stageStackBackup(
 	}
 
 	return archive.Manifest{
-		SchemaVersion:    archive.ManifestSchemaVersion,
-		CreatedAt:        backupNow.Format(time.RFC3339),
-		StackName:        stack.Name,
-		StackDir:         stack.StackDir,
-		ComposeFile:      stack.ComposeFile,
-		FilesArchive:     filesRel,
-		HostFilesArchive: hostRel,
-		User:             stack.User,
-		Databases:        manifestDBs,
-		Angie:            stack.Angie,
-		HostFiles:        hostRecords,
-		DAC:              stack.DAC,
-		RestoreSteps:     stack.RestoreSteps,
+		SchemaVersion:              archive.ManifestSchemaVersion,
+		CreatedAt:                  backupNow.Format(time.RFC3339),
+		StackName:                  stack.Name,
+		StackDir:                   stack.StackDir,
+		ComposeFile:                stack.ComposeFile,
+		FilesArchive:               filesRel,
+		HostFilesArchive:           hostRel,
+		FilesUncompressedBytes:     filesUncompressed,
+		HostFilesUncompressedBytes: hostUncompressed,
+		User:                       stack.User,
+		Databases:                  manifestDBs,
+		Angie:                      stack.Angie,
+		HostFiles:                  hostRecords,
+		DAC:                        stack.DAC,
+		RestoreSteps:               stack.RestoreSteps,
 	}, nil
 }
 
@@ -206,26 +209,28 @@ func (o *Orchestrator) dumpAllDatabases(ctx context.Context, stack *config.Stack
 		db := &stack.Databases[idx]
 		relArtifact := archive.StackDBArchiveName(stack.Name, db.ID, stamp, len(stack.Databases))
 		outPath := filepath.Join(stagingDir, relArtifact)
-		if err := o.Database.DumpToFile(ctx, stack.ComposeFile, db, stack.ZstdLevel, outPath); err != nil {
+		uncompressedBytes, err := o.Database.DumpToFile(ctx, stack.ComposeFile, db, stack.ZstdLevel, outPath)
+		if err != nil {
 			return nil, fmt.Errorf("dump database %q: %w", db.ID, err)
 		}
 		manifestDBs = append(manifestDBs, archive.ManifestDB{
-			ID:           db.ID,
-			Driver:       db.Driver,
-			Service:      db.Service,
-			Host:         db.Host,
-			DBUser:       db.DBUser,
-			DBName:       db.DBName,
-			Secrets:      db.Secrets,
-			ArtifactPath: relArtifact,
+			ID:                db.ID,
+			Driver:            db.Driver,
+			Service:           db.Service,
+			Host:              db.Host,
+			DBUser:            db.DBUser,
+			DBName:            db.DBName,
+			Secrets:           db.Secrets,
+			ArtifactPath:      relArtifact,
+			UncompressedBytes: uncompressedBytes,
 		})
 	}
 	return manifestDBs, nil
 }
 
-func (o *Orchestrator) snapshotAndArchiveFiles(ctx context.Context, stack *config.StackConfig, filesOut string) (err error) {
+func (o *Orchestrator) snapshotAndArchiveFiles(ctx context.Context, stack *config.StackConfig, filesOut string) (filesUncompressed int64, err error) {
 	if createErr := o.LVM.CreateSnapshot(ctx, &stack.LVM); createErr != nil {
-		return fmt.Errorf("create snapshot: %w", createErr)
+		return 0, fmt.Errorf("create snapshot: %w", createErr)
 	}
 	defer func() {
 		if cleanErr := o.LVM.CleanupSnapshot(ctx, &stack.LVM); cleanErr != nil {
@@ -234,13 +239,14 @@ func (o *Orchestrator) snapshotAndArchiveFiles(ctx context.Context, stack *confi
 	}()
 
 	if hookErr := o.Hooks.RunPhase(ctx, "post_snapshot", stack.StackDir, stack.ComposeFile, stack.Hooks.PostSnapshot); hookErr != nil {
-		return fmt.Errorf("run post_snapshot hooks: %w", hookErr)
+		return 0, fmt.Errorf("run post_snapshot hooks: %w", hookErr)
 	}
 
-	if archErr := o.Archive.ArchiveStackFiles(ctx, stack.LVM.MountPoint, stack.StackDir, &stack.Files, stack.ZstdLevel, filesOut); archErr != nil {
-		return fmt.Errorf("archive snapshot files: %w", archErr)
+	filesUncompressed, archErr := o.Archive.ArchiveStackFiles(ctx, stack.LVM.MountPoint, stack.StackDir, &stack.Files, stack.ZstdLevel, filesOut)
+	if archErr != nil {
+		return 0, fmt.Errorf("archive snapshot files: %w", archErr)
 	}
-	return nil
+	return filesUncompressed, nil
 }
 
 func printBackupDryRun(out io.Writer, bundle *config.Bundle, targets []config.StackConfig, noSync bool) {

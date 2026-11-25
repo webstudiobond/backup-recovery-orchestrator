@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/cmdexec"
@@ -23,37 +24,54 @@ type recordedTarCall struct {
 
 type fakeArchiveRunner struct {
 	runErr     error
+	zstdErr    error
 	calls      []recordedTarCall
+	tarPayload []byte
+	mu         sync.Mutex
 	skipWrite  bool
 	writeEmpty bool
 }
 
 func (f *fakeArchiveRunner) Run(_ context.Context, spec *cmdexec.Spec) error {
+	f.mu.Lock()
 	f.calls = append(f.calls, recordedTarCall{
 		name: spec.Name,
 		args: slices.Clone(spec.Args),
 		env:  slices.Clone(spec.Env),
 	})
+	f.mu.Unlock()
 
-	if f.runErr != nil {
-		return f.runErr
-	}
-
-	if f.skipWrite {
+	if spec.Name == "tar" {
+		if f.runErr != nil {
+			return f.runErr
+		}
+		if spec.Stdout != nil && !f.skipWrite && !f.writeEmpty {
+			payload := f.tarPayload
+			if payload == nil {
+				payload = []byte("raw-tar-payload")
+			}
+			_, err := spec.Stdout.Write(payload)
+			return err
+		}
 		return nil
 	}
 
-	content := []byte("compressed-tar-data")
-	if f.writeEmpty {
-		content = []byte{}
+	if spec.Name == "zstd" {
+		if f.zstdErr != nil {
+			return f.zstdErr
+		}
+		if f.skipWrite || f.writeEmpty {
+			return nil
+		}
+		if spec.Stdin != nil && spec.Stdout != nil {
+			_, err := io.Copy(spec.Stdout, spec.Stdin)
+			return err
+		}
+		return nil
 	}
 
-	for i, arg := range spec.Args {
-		if arg == "-capf" && i+1 < len(spec.Args) {
-			if err := os.WriteFile(spec.Args[i+1], content, 0o600); err != nil {
-				return err
-			}
-		}
+	if f.runErr != nil {
+		return f.runErr
 	}
 	return nil
 }

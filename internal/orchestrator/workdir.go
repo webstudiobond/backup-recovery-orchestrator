@@ -198,12 +198,20 @@ func isManagedWorkEntry(name string) bool {
 		strings.HasPrefix(name, angieRollbackPrefix)
 }
 
-func (o *Orchestrator) checkRestoreFreeSpace(ctx context.Context, global *config.GlobalConfig, archivePath, workDir, stackDir string) error {
+func (o *Orchestrator) checkRestoreFreeSpace(
+	ctx context.Context,
+	global *config.GlobalConfig,
+	archivePath string,
+	workDir string,
+	stackDir string,
+	filesUncompressedBytes int64,
+) error {
 	info, statErr := osStat(filepath.Clean(archivePath))
 	if statErr != nil {
 		return fmt.Errorf("stat archive %q: %w", archivePath, statErr)
 	}
 	archiveBytes := uint64(max(info.Size(), 0))
+	stackRequired := max(archiveBytes, uint64(max(filesUncompressedBytes, 0)))
 
 	workRequired := archiveBytes
 	if workDir == backupWorkDir(global.BackupRoot) && global.MinFreeGB > 0 {
@@ -211,7 +219,7 @@ func (o *Orchestrator) checkRestoreFreeSpace(ctx context.Context, global *config
 	}
 
 	if sameFilesystemFn(workDir, stackDir) {
-		combinedRequired, ok := addUint64Checked(workRequired, archiveBytes)
+		combinedRequired, ok := addUint64Checked(workRequired, stackRequired)
 		if !ok {
 			return fmt.Errorf("combined required free space for %q overflows uint64", workDir)
 		}
@@ -224,7 +232,7 @@ func (o *Orchestrator) checkRestoreFreeSpace(ctx context.Context, global *config
 	if err := o.LVM.CheckFreeSpaceBytes(ctx, workDir, workRequired); err != nil {
 		return fmt.Errorf("check free space for restore work directory: %w", err)
 	}
-	if err := o.LVM.CheckFreeSpaceBytes(ctx, stackDir, archiveBytes); err != nil {
+	if err := o.LVM.CheckFreeSpaceBytes(ctx, stackDir, stackRequired); err != nil {
 		return fmt.Errorf("check free space for stack_dir: %w", err)
 	}
 	return nil

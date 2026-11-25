@@ -404,17 +404,24 @@ func TestExecuteDataExtractFiles(t *testing.T) {
 
 	runner := &fakeOrchRunner{snapMount: bundle.Global.LVM.MountPoint, stackName: stackName}
 	okOrch := newTestOrchestrator(runner, pPath, gPath, nil)
-	failOrch := newTestOrchestrator(&fakeOrchRunner{failMatch: "tar"}, pPath, gPath, nil)
+	failOrch := newTestOrchestrator(&fakeOrchRunner{failMatch: "zstd -dc"}, pPath, gPath, nil)
+
+	unpackDir := t.TempDir()
+	tarBytes, tarErr := makeFakeOrchTarBytes()
+	if tarErr != nil {
+		t.Fatalf("makeFakeOrchTarBytes: %v", tarErr)
+	}
 
 	rctx := &restoreExecutionContext{
 		manifest: &archive.Manifest{
-			StackName: stackName,
-			StackDir:  bundle.Stacks[0].StackDir,
-			User:      bundle.Stacks[0].User,
+			StackName:              stackName,
+			StackDir:               bundle.Stacks[0].StackDir,
+			User:                   bundle.Stacks[0].User,
+			FilesUncompressedBytes: int64(len(tarBytes)),
 		},
 		global:    &bundle.Global,
 		out:       io.Discard,
-		unpackDir: t.TempDir(),
+		unpackDir: unpackDir,
 	}
 
 	extractCases := []struct {
@@ -422,6 +429,7 @@ func TestExecuteDataExtractFiles(t *testing.T) {
 		archiveName string
 		wantErr     string
 		name        string
+		limit       int64
 	}{
 		{
 			orch:    okOrch,
@@ -430,18 +438,33 @@ func TestExecuteDataExtractFiles(t *testing.T) {
 		},
 		{
 			orch:        failOrch,
-			archiveName: "files.tar.zst",
+			archiveName: "files_zstd_err.tar.zst",
 			wantErr:     "extract stack files",
-			name:        "tar error",
+			name:        "zstd error",
+			limit:       int64(len(tarBytes)),
 		},
 		{
 			orch:        okOrch,
-			archiveName: "files.tar.zst",
+			archiveName: "files_limit.tar.zst",
+			wantErr:     "exceeds maximum allowed size",
+			name:        "declared uncompressed limit exceeded",
+			limit:       64,
+		},
+		{
+			orch:        okOrch,
+			archiveName: "files_ok.tar.zst",
 			name:        "extract success",
+			limit:       int64(len(tarBytes)),
 		},
 	}
 	for _, tc := range extractCases {
+		if tc.archiveName != "" {
+			if err := os.WriteFile(filepath.Join(unpackDir, tc.archiveName), tarBytes, 0o600); err != nil {
+				t.Fatalf("write %s: %v", tc.archiveName, err)
+			}
+		}
 		rctx.manifest.FilesArchive = tc.archiveName
+		rctx.manifest.FilesUncompressedBytes = tc.limit
 		handled, err := tc.orch.executeDataOrInfraStep(ctx, rctx, &config.RestoreStep{Action: "extract_files"})
 		if !handled {
 			t.Fatalf("expected handled=true for %s", tc.name)
@@ -453,6 +476,26 @@ func TestExecuteDataExtractFiles(t *testing.T) {
 			t.Fatalf("unexpected error for %s: %v", tc.name, err)
 		}
 	}
+}
+
+func TestExecuteDataMoveAndUnhandled(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	stackName := "app-data-move"
+	bundle := buildTestBundle(t, root, stackName)
+	pPath, gPath := writeFakeAccounts(t, root, stackName)
+	okOrch := newTestOrchestrator(&fakeOrchRunner{}, pPath, gPath, nil)
+	rctx := &restoreExecutionContext{
+		manifest: &archive.Manifest{
+			StackName: stackName,
+			StackDir:  bundle.Stacks[0].StackDir,
+			User:      bundle.Stacks[0].User,
+		},
+		global: &bundle.Global,
+		out:    io.Discard,
+	}
 
 	handled, errMove := okOrch.executeDataOrInfraStep(ctx, rctx, &config.RestoreStep{Action: "move_contents", From: "nonexistent", To: "dst"})
 	if !handled || errMove == nil || !strings.Contains(errMove.Error(), "stat source directory") {
@@ -462,6 +505,9 @@ func TestExecuteDataExtractFiles(t *testing.T) {
 	handled, errDefault := okOrch.executeDataOrInfraStep(ctx, rctx, &config.RestoreStep{Action: "unhandled_data_action"})
 	if handled || errDefault != nil {
 		t.Fatalf("expected unhandled action returning false and nil err, got handled=%v err=%v", handled, errDefault)
+	}
+	if got := effectiveInnerExtractLimit(0, &config.GlobalConfig{MaxArchiveGB: 2}); got != 2<<30 {
+		t.Fatalf("expected fallback limit 2 GiB, got %d", got)
 	}
 }
 

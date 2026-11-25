@@ -17,7 +17,8 @@ func TestExtractStackFilesCleanSlateAndHostFiles(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	stackDir := filepath.Join(t.TempDir(), "site1")
+	tmp := t.TempDir()
+	stackDir := filepath.Join(tmp, "site1")
 	staleFile := filepath.Join(stackDir, "stale.txt")
 	if err := os.MkdirAll(stackDir, 0o750); err != nil {
 		t.Fatalf("mkdir stack: %v", err)
@@ -26,20 +27,40 @@ func TestExtractStackFilesCleanSlateAndHostFiles(t *testing.T) {
 		t.Fatalf("write stale: %v", err)
 	}
 
+	rawTar := makeCustomTarBytes(t, []customTarEntry{
+		{header: &tar.Header{Name: "app.txt", Mode: 0o640, Typeflag: tar.TypeReg, Size: 5}, body: []byte("hello")},
+	})
+	filesPath := filepath.Join(tmp, "site1_files_2026-11-16_13-00-00.tar.zst")
+	if err := os.WriteFile(filesPath, rawTar, 0o600); err != nil {
+		t.Fatalf("write files archive: %v", err)
+	}
+
 	runner := &fakeArchiveRunner{}
 	engine := NewEngine(runner)
-	filesPath := "/tmp/site1_files_2026-11-16_13-00-00.tar.zst"
 	if err := engine.ExtractStackFilesCleanSlate(ctx, filesPath, stackDir); err != nil {
 		t.Fatalf("ExtractStackFilesCleanSlate error: %v", err)
 	}
 	if _, statErr := os.Stat(staleFile); !os.IsNotExist(statErr) {
 		t.Fatalf("expected stale file to be cleared before extraction")
 	}
-	if len(runner.calls) != 1 || !slices.Equal(runner.calls[0].args, []string{"--numeric-owner", "-xpf", filesPath, "-C", stackDir}) {
-		t.Fatalf("unexpected tar extract call: %+v", runner.calls)
+	stackRoot, openErr := os.OpenRoot(stackDir)
+	if openErr != nil {
+		t.Fatalf("open stack root: %v", openErr)
+	}
+	defer func() {
+		if closeErr := stackRoot.Close(); closeErr != nil {
+			t.Errorf("close stack root: %v", closeErr)
+		}
+	}()
+	extracted, readErr := stackRoot.ReadFile("app.txt")
+	if readErr != nil || string(extracted) != "hello" {
+		t.Fatalf("expected extracted app.txt, got %q, err=%v", string(extracted), readErr)
+	}
+	if len(runner.calls) != 1 || runner.calls[0].name != "zstd" || !slices.Equal(runner.calls[0].args, []string{"-dc"}) {
+		t.Fatalf("unexpected zstd extract call: %+v", runner.calls)
 	}
 
-	if err := engine.ExtractHostFiles(ctx, "/tmp/site1_host_files_2026-11-16_13-00-00.tar.zst", []string{"../etc/passwd"}); err == nil {
+	if err := engine.ExtractHostFiles(ctx, filepath.Join(tmp, "site1_host_files.tar.zst"), []string{"../etc/passwd"}); err == nil {
 		t.Fatalf("expected path traversal rejection in ExtractHostFiles")
 	}
 }
@@ -368,18 +389,25 @@ func TestExtractStackFilesCleanSlateErrors(t *testing.T) {
 		t.Fatalf("write fileAsDir: %v", err)
 	}
 
+	validArchive := filepath.Join(root, "valid_stack.tar.zst")
+	if err := os.WriteFile(validArchive, []byte("stub"), 0o600); err != nil {
+		t.Fatalf("write validArchive: %v", err)
+	}
+
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	origMkdirAll := osMkdirAll
+	origOpenRoot := openRoot
 	t.Cleanup(func() {
 		osMkdirAll = origMkdirAll
+		openRoot = origOpenRoot
 	})
 
 	tests := []struct {
 		ctx       context.Context
 		setupMock func(t *testing.T)
-		runnerErr error
+		zstdErr   error
 		name      string
 		stackDir  string
 		wantErr   bool
@@ -427,24 +455,37 @@ func TestExtractStackFilesCleanSlateErrors(t *testing.T) {
 			wantErr:  true,
 		},
 		{
-			ctx:       context.Background(),
-			runnerErr: errors.New("simulated tar run failure"),
-			name:      "tar_execution_failure",
-			stackDir:  validDir,
-			wantErr:   true,
+			ctx: context.Background(),
+			setupMock: func(t *testing.T) {
+				t.Helper()
+				openRoot = func(string) (*os.Root, error) {
+					return nil, errors.New("simulated open stack root failure")
+				}
+			},
+			name:     "open_stack_root_failure",
+			stackDir: validDir,
+			wantErr:  true,
+		},
+		{
+			ctx:      context.Background(),
+			zstdErr:  errors.New("simulated zstd run failure"),
+			name:     "zstd_execution_failure",
+			stackDir: validDir,
+			wantErr:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			osMkdirAll = origMkdirAll
+			openRoot = origOpenRoot
 			if tt.setupMock != nil {
 				tt.setupMock(t)
 			}
-			runner := &fakeArchiveRunner{runErr: tt.runnerErr}
+			runner := &fakeArchiveRunner{zstdErr: tt.zstdErr}
 			engine := NewEngine(runner)
 
-			err := engine.ExtractStackFilesCleanSlate(tt.ctx, "/dummy/path.tar.zst", tt.stackDir)
+			err := engine.ExtractStackFilesCleanSlate(tt.ctx, validArchive, tt.stackDir)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ExtractStackFilesCleanSlate error = %v, wantErr = %v", err, tt.wantErr)
 			}
@@ -453,17 +494,30 @@ func TestExtractStackFilesCleanSlateErrors(t *testing.T) {
 }
 
 func TestExtractHostFiles(t *testing.T) {
-	t.Parallel()
+	tmp := t.TempDir()
+	hostArchive := filepath.Join(tmp, "host.tar.zst")
+	rawHostTar := makeCustomTarBytes(t, []customTarEntry{
+		{header: &tar.Header{Name: "etc/cron.d/job_ok", Mode: 0o600, Typeflag: tar.TypeReg, Size: 5}, body: []byte("cron1")},
+	})
+	if err := os.WriteFile(hostArchive, rawHostTar, 0o600); err != nil {
+		t.Fatalf("write host archive: %v", err)
+	}
+
+	origOpenHostRoot := openHostRoot
+	t.Cleanup(func() {
+		openHostRoot = origOpenHostRoot
+	})
 
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	tests := []struct {
-		ctx       context.Context
-		runnerErr error
-		name      string
-		paths     []string
-		wantErr   bool
+		ctx      context.Context
+		zstdErr  error
+		name     string
+		paths    []string
+		failRoot bool
+		wantErr  bool
 	}{
 		{
 			ctx:     canceledCtx,
@@ -484,27 +538,43 @@ func TestExtractHostFiles(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			ctx:      context.Background(),
+			name:     "open_host_root_failure",
+			paths:    []string{"etc/cron.d/job_root_err"},
+			failRoot: true,
+			wantErr:  true,
+		},
+		{
 			ctx:     context.Background(),
 			name:    "successful_host_files_extraction",
-			paths:   []string{"etc/cron.d/job"},
+			paths:   []string{"etc/cron.d/job_ok"},
 			wantErr: false,
 		},
 		{
-			ctx:       context.Background(),
-			runnerErr: errors.New("simulated tar extract error"),
-			name:      "runner_execution_failure",
-			paths:     []string{"etc/cron.d/job"},
-			wantErr:   true,
+			ctx:     context.Background(),
+			zstdErr: errors.New("simulated zstd extract error"),
+			name:    "runner_execution_failure",
+			paths:   []string{"etc/cron.d/job_zstd_err"},
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			runner := &fakeArchiveRunner{runErr: tt.runnerErr}
+			if tt.failRoot {
+				openHostRoot = func() (*os.Root, error) {
+					return nil, errors.New("simulated host root error")
+				}
+			} else {
+				hostDir := t.TempDir()
+				openHostRoot = func() (*os.Root, error) {
+					return os.OpenRoot(hostDir)
+				}
+			}
+			runner := &fakeArchiveRunner{zstdErr: tt.zstdErr}
 			engine := NewEngine(runner)
 
-			err := engine.ExtractHostFiles(tt.ctx, "/dummy/host.tar.zst", tt.paths)
+			err := engine.ExtractHostFiles(tt.ctx, hostArchive, tt.paths)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ExtractHostFiles error = %v, wantErr = %v", err, tt.wantErr)
 			}
@@ -521,15 +591,21 @@ func TestClearDirectoryContents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(validDir, "file.txt"), []byte("content"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
+	emptyDir := filepath.Join(root, "empty_clear")
+	if err := os.MkdirAll(emptyDir, 0o750); err != nil {
+		t.Fatalf("mkdir empty_clear: %v", err)
+	}
 
 	fileAsDir := filepath.Join(root, "regular_file")
 	if err := os.WriteFile(fileAsDir, []byte("file"), 0o600); err != nil {
 		t.Fatalf("write regular_file: %v", err)
 	}
 
-	origRemoveAll := osRemoveAll
+	origRemoveAll := rootRemoveAll
+	origOpenRoot := openRoot
 	t.Cleanup(func() {
-		osRemoveAll = origRemoveAll
+		rootRemoveAll = origRemoveAll
+		openRoot = origOpenRoot
 	})
 
 	tests := []struct {
@@ -544,8 +620,24 @@ func TestClearDirectoryContents(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "empty_directory_returns_nil",
+			dir:     emptyDir,
+			wantErr: false,
+		},
+		{
 			name:    "reading_regular_file_returns_error",
 			dir:     fileAsDir,
+			wantErr: true,
+		},
+		{
+			name: "open_root_error_returns_failure",
+			dir:  validDir,
+			setupMock: func(t *testing.T) {
+				t.Helper()
+				openRoot = func(string) (*os.Root, error) {
+					return nil, errors.New("simulated open root error")
+				}
+			},
 			wantErr: true,
 		},
 		{
@@ -553,7 +645,7 @@ func TestClearDirectoryContents(t *testing.T) {
 			dir:  validDir,
 			setupMock: func(t *testing.T) {
 				t.Helper()
-				osRemoveAll = func(string) error {
+				rootRemoveAll = func(*os.Root, string) error {
 					return errors.New("simulated remove all error")
 				}
 			},
@@ -568,7 +660,8 @@ func TestClearDirectoryContents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			osRemoveAll = origRemoveAll
+			rootRemoveAll = origRemoveAll
+			openRoot = origOpenRoot
 			if tt.setupMock != nil {
 				tt.setupMock(t)
 			}

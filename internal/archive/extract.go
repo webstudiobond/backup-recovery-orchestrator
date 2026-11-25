@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	openRoot    = os.OpenRoot
-	osRemoveAll = os.RemoveAll
-	osMkdirAll  = os.MkdirAll
+	openRoot      = os.OpenRoot
+	rootRemoveAll = (*os.Root).RemoveAll
+	osMkdirAll    = os.MkdirAll
 )
 
 // UnpackContainer extracts all regular members of tarPath into dstDir after enforcing safe member paths and default bounds.
@@ -120,71 +120,38 @@ func writeRootFile(root *os.Root, relPath string, src io.Reader, mode os.FileMod
 
 // ExtractStackFilesCleanSlate wipes stackDir contents and extracts filesTarZstPath with numeric ownership preserved.
 func (e *Engine) ExtractStackFilesCleanSlate(ctx context.Context, filesTarZstPath, stackDir string) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context canceled before extracting stack files: %w", err)
-	}
-
-	cleanStackDir := filepath.Clean(stackDir)
-	if cleanStackDir == "" || cleanStackDir == string(filepath.Separator) || cleanStackDir == "." {
-		return fmt.Errorf("refusing clean-slate wipe on unsafe stack_dir %q", stackDir)
-	}
-
-	if err := clearDirectoryContents(cleanStackDir); err != nil {
-		return err
-	}
-	if err := osMkdirAll(cleanStackDir, 0o750); err != nil {
-		return fmt.Errorf("ensure stack_dir %q: %w", cleanStackDir, err)
-	}
-
-	if runErr := e.runTar(ctx, nil, []string{"--numeric-owner", "-xpf", filesTarZstPath, "-C", cleanStackDir}); runErr != nil {
-		return fmt.Errorf("extract stack archive %q into %q: %w", filesTarZstPath, cleanStackDir, runErr)
-	}
-	return nil
+	return e.ExtractStackFilesCleanSlateWithLimits(ctx, filesTarZstPath, stackDir, 0)
 }
 
 // ExtractHostFiles extracts explicitly allowlisted host paths from hostFilesTarZstPath relative to root.
 func (e *Engine) ExtractHostFiles(ctx context.Context, hostFilesTarZstPath string, allowedRelPaths []string) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context canceled before extracting host_files: %w", err)
-	}
-	if len(allowedRelPaths) == 0 {
-		return nil
-	}
-
-	cleanTargets := make([]string, 0, len(allowedRelPaths))
-	for _, rel := range allowedRelPaths {
-		sanitized, err := sanitizeTarMemberPath(filepath.ToSlash(rel))
-		if err != nil {
-			return fmt.Errorf("unsafe host_file target %q: %w", rel, err)
-		}
-		cleanTargets = append(cleanTargets, filepath.FromSlash(sanitized))
-	}
-
-	args := make([]string, 0, 5+len(cleanTargets))
-	args = append(args, "--numeric-owner", "-xpf", hostFilesTarZstPath, "-C", string(filepath.Separator))
-	args = append(args, cleanTargets...)
-
-	if runErr := e.runTar(ctx, nil, args); runErr != nil {
-		return fmt.Errorf("extract host_files from %q: %w", hostFilesTarZstPath, runErr)
-	}
-	return nil
+	return e.ExtractHostFilesWithLimits(ctx, hostFilesTarZstPath, allowedRelPaths, 0)
 }
 
 func clearDirectoryContents(dir string) error {
-	entries, err := os.ReadDir(dir)
+	cleanDir := filepath.Clean(dir)
+	entries, err := os.ReadDir(cleanDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("read directory %q for clean slate: %w", dir, err)
 	}
+	if len(entries) == 0 {
+		return nil
+	}
+	root, rootErr := openRoot(cleanDir)
+	if rootErr != nil {
+		return fmt.Errorf("open directory %q for clean slate: %w", dir, rootErr)
+	}
+	var rmErr error
 	for _, entry := range entries {
-		target := filepath.Join(dir, entry.Name())
-		if rmErr := osRemoveAll(target); rmErr != nil {
-			return fmt.Errorf("remove %q during clean slate: %w", target, rmErr)
+		if err := rootRemoveAll(root, entry.Name()); err != nil {
+			rmErr = fmt.Errorf("remove %q in %q during clean slate: %w", entry.Name(), dir, err)
+			break
 		}
 	}
-	return nil
+	return errors.Join(rmErr, root.Close())
 }
 
 func cleanArchiveMember(cleanDst, raw string) (relOS, targetPath string, err error) {

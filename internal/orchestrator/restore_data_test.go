@@ -40,7 +40,14 @@ func TestRestoreHostFilesAndErrors(t *testing.T) {
 
 	rctx.manifest.HostFilesArchive = "host_files.tar.zst"
 	rctx.unpackDir = root
-	failRunner := &fakeOrchRunner{failMatch: "--numeric-owner"}
+	tarBytes, tarErr := makeFakeOrchTarBytes()
+	if tarErr != nil {
+		t.Fatalf("makeFakeOrchTarBytes: %v", tarErr)
+	}
+	if err := os.WriteFile(filepath.Join(root, "host_files.tar.zst"), tarBytes, 0o600); err != nil {
+		t.Fatalf("write host_files.tar.zst: %v", err)
+	}
+	failRunner := &fakeOrchRunner{failMatch: "zstd -dc"}
 	failOrch := newTestOrchestrator(failRunner, pPath, gPath, nil)
 	if err := failOrch.restoreHostFiles(ctx, rctx); err == nil || !strings.Contains(err.Error(), "extract host_files") {
 		t.Fatalf("expected extract host_files error, got %v", err)

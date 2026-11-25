@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,10 @@ type fakeCLIRunner struct{}
 
 func (fakeCLIRunner) Run(_ context.Context, spec *cmdexec.Spec) error {
 	if spec.Name == "tar" {
+		if spec.Stdout != nil {
+			_, err := spec.Stdout.Write([]byte("archive-content"))
+			return err
+		}
 		for i := range spec.Args {
 			if strings.HasSuffix(spec.Args[i], ".tar") || strings.HasSuffix(spec.Args[i], ".tar.zst") {
 				if err := os.WriteFile(spec.Args[i], []byte("archive-content"), 0o600); err != nil {
@@ -23,6 +28,10 @@ func (fakeCLIRunner) Run(_ context.Context, spec *cmdexec.Spec) error {
 				}
 			}
 		}
+	}
+	if spec.Name == "zstd" && spec.Stdin != nil && spec.Stdout != nil {
+		_, err := io.Copy(spec.Stdout, spec.Stdin)
+		return err
 	}
 	return nil
 }
