@@ -40,7 +40,7 @@ func validateGlobalConfig(cfg *GlobalConfig) error {
 	if err := validateRetention(cfg.Retention, knownDests); err != nil {
 		return err
 	}
-	return validateGlobalAngie(&cfg.Angie)
+	return validateGlobalReverseProxyStack(cfg.ReverseProxyStack)
 }
 
 func validateTimezone(tz string) error {
@@ -52,23 +52,7 @@ func validateTimezone(tz string) error {
 	}
 }
 
-func validateGlobalAngie(angie *GlobalAngieConfig) error {
-	if angie.ComposeFile != "" && !filepath.IsAbs(angie.ComposeFile) {
-		return fmt.Errorf("angie.compose_file %q must be an absolute path", angie.ComposeFile)
-	}
-	if angie.CertsDir != "" && !filepath.IsAbs(angie.CertsDir) {
-		return fmt.Errorf("angie.certs_dir %q must be an absolute path", angie.CertsDir)
-	}
-	if angie.DomainsDir != "" && !filepath.IsAbs(angie.DomainsDir) {
-		return fmt.Errorf("angie.domains_dir %q must be an absolute path", angie.DomainsDir)
-	}
-	if angie.StreamDir != "" && !filepath.IsAbs(angie.StreamDir) {
-		return fmt.Errorf("angie.stream_dir %q must be an absolute path", angie.StreamDir)
-	}
-	return nil
-}
-
-func validateStackConfig(cfg *StackConfig, knownDests map[string]struct{}) error {
+func validateStackIdentityAndPaths(cfg *StackConfig) error {
 	if err := validateIdentifier(cfg.Name, "stack name"); err != nil {
 		return err
 	}
@@ -84,6 +68,13 @@ func validateStackConfig(cfg *StackConfig, knownDests map[string]struct{}) error
 	if !filepath.IsAbs(cfg.ComposeFile) {
 		return fmt.Errorf("compose_file %q must be an absolute path", cfg.ComposeFile)
 	}
+	return nil
+}
+
+func validateStackConfig(cfg *StackConfig, knownDests map[string]struct{}) error {
+	if err := validateStackIdentityAndPaths(cfg); err != nil {
+		return err
+	}
 	if err := validateZstdLevel(cfg.ZstdLevel); err != nil {
 		return err
 	}
@@ -96,8 +87,13 @@ func validateStackConfig(cfg *StackConfig, knownDests map[string]struct{}) error
 	if err := validateStackDestinations(cfg.Destinations, knownDests); err != nil {
 		return err
 	}
-	if err := validateStackAngie(&cfg.Angie); err != nil {
+	if err := validateStackReverseProxy(&cfg.ReverseProxy); err != nil {
 		return err
+	}
+	if cfg.ReverseProxyProvider != nil {
+		if err := validateReverseProxyProvider(cfg.ReverseProxyProvider); err != nil {
+			return err
+		}
 	}
 	if err := validateDACRules(cfg.DAC); err != nil {
 		return err
@@ -233,16 +229,6 @@ func validateZstdLevel(level int) error {
 	return nil
 }
 
-func validateStackAngie(angie *StackAngieConfig) error {
-	if err := validateIdentifierList(angie.ACMENames, "angie.acme_names entry"); err != nil {
-		return err
-	}
-	if err := validateIdentifierList(angie.DomainConfs, "angie.domain_confs entry"); err != nil {
-		return err
-	}
-	return validateIdentifierList(angie.StreamConfs, "angie.stream_confs entry")
-}
-
 func validateIdentifierList(items []string, field string) error {
 	for _, item := range items {
 		if err := validateIdentifier(item, field); err != nil {
@@ -289,8 +275,8 @@ func validateIdentifier(value, label string) error {
 	if value == "" {
 		return fmt.Errorf("%s must not be empty", label)
 	}
-	if strings.HasPrefix(value, ".") || strings.Contains(value, "..") {
-		return fmt.Errorf("%s %q must not start with '.' or contain '..'", label, value)
+	if strings.HasPrefix(value, ".") || strings.HasPrefix(value, "-") || strings.Contains(value, "..") {
+		return fmt.Errorf("%s %q must not start with '.' or '-' or contain '..'", label, value)
 	}
 	for _, r := range value {
 		if !isAllowedIdentifierRune(r) {

@@ -5,6 +5,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 func resolveStack(global *GlobalConfig, profiles map[string]StackLayer, stack *StackLayer) (StackConfig, error) {
@@ -133,11 +134,21 @@ func applyResourceLayer(out *StackConfig, layer *StackLayer) {
 	if layer.Databases != nil {
 		out.Databases = cloneDatabases(layer.Databases)
 	}
-	if layer.Angie != nil {
-		out.Angie = StackAngieConfig{
-			ACMENames:   slices.Clone(layer.Angie.ACMENames),
-			DomainConfs: slices.Clone(layer.Angie.DomainConfs),
-			StreamConfs: slices.Clone(layer.Angie.StreamConfs),
+	if layer.ReverseProxyProvider != nil {
+		out.ReverseProxyProvider = &ReverseProxyProviderConfig{
+			Type:        strings.TrimSpace(layer.ReverseProxyProvider.Type),
+			ServiceName: strings.TrimSpace(layer.ReverseProxyProvider.ServiceName),
+			CertsDir:    strings.TrimSpace(layer.ReverseProxyProvider.CertsDir),
+			DomainsDir:  strings.TrimSpace(layer.ReverseProxyProvider.DomainsDir),
+			StreamDir:   strings.TrimSpace(layer.ReverseProxyProvider.StreamDir),
+		}
+	}
+	if layer.ReverseProxy != nil {
+		out.hasReverseProxyBlock = true
+		out.ReverseProxy = StackReverseProxyConfig{
+			ACMENames:   slices.Clone(layer.ReverseProxy.ACMENames),
+			DomainConfs: slices.Clone(layer.ReverseProxy.DomainConfs),
+			StreamConfs: slices.Clone(layer.ReverseProxy.StreamConfs),
 		}
 	}
 	if layer.RestoreSteps != nil {

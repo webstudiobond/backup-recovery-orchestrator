@@ -14,7 +14,7 @@
     { "path": "data", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true },
     { "path": "wgcf", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true }
   ],
-  "angie": {
+  "reverse_proxy": {
     "acme_names": ["example"],
     "domain_confs": ["example.com.conf"]
   },
@@ -22,7 +22,7 @@
     { "action": "compose_down" },
     { "action": "extract_files" },
     { "action": "apply_dac" },
-    { "action": "deploy_angie" },
+    { "action": "deploy_reverse_proxy" },
     { "action": "compose_up" },
     { "action": "wait_healthy" }
   ]

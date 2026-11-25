@@ -45,7 +45,7 @@
     { "path": "telegram", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true },
     { "path": "valkey", "owner": "stack:stack", "dir_mode": "0700", "file_mode": "0600", "recursive": true }
   ],
-  "angie": {
+  "reverse_proxy": {
     "acme_names": ["matrix", "element", "livekit", "matrix_rtc"],
     "domain_confs": ["matrix.example.com.conf", "element.example.net.conf", "livekit.example.org.conf"],
     "stream_confs": ["livekit-turn.inc"]
@@ -55,7 +55,7 @@
     { "action": "extract_files" },
     { "action": "move_contents", "from": "tuwunel/data/backup_checkpoint", "to": "tuwunel/data" },
     { "action": "apply_dac" },
-    { "action": "deploy_angie" },
+    { "action": "deploy_reverse_proxy" },
     { "action": "compose_up" },
     { "action": "wait_healthy", "timeout_sec": 600 }
   ]

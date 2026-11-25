@@ -46,31 +46,32 @@ func TestBundleStackByName(t *testing.T) {
 	}
 }
 
-func TestBundleAngieStack(t *testing.T) {
+func TestBundleReverseProxyStack(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name        string
-		serviceName string
-		stackName   string
-		wantMatch   bool
+		name              string
+		reverseProxyStack string
+		stackName         string
+		wantMatch         bool
 	}{
 		{
-			name:      "default service name matches angie stack",
-			stackName: DefaultAngieService,
-			wantMatch: true,
+			name:              "empty reverse_proxy_stack returns nil",
+			reverseProxyStack: "",
+			stackName:         "angie",
+			wantMatch:         false,
 		},
 		{
-			name:        "custom service name matches configured stack",
-			serviceName: "proxy-edge",
-			stackName:   "proxy-edge",
-			wantMatch:   true,
+			name:              "custom stack name matches configured reverse proxy stack",
+			reverseProxyStack: "gateway-proxy",
+			stackName:         "gateway-proxy",
+			wantMatch:         true,
 		},
 		{
-			name:        "missing angie stack returns nil",
-			serviceName: DefaultAngieService,
-			stackName:   "other-app",
-			wantMatch:   false,
+			name:              "missing reverse proxy stack returns nil",
+			reverseProxyStack: "edge-ingress",
+			stackName:         "other-app",
+			wantMatch:         false,
 		},
 	}
 
@@ -78,18 +79,18 @@ func TestBundleAngieStack(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			bundle := Bundle{
-				Global: GlobalConfig{Angie: GlobalAngieConfig{ServiceName: tc.serviceName}},
+				Global: GlobalConfig{ReverseProxyStack: tc.reverseProxyStack},
 				Stacks: []StackConfig{{Name: tc.stackName, Enabled: true}},
 			}
-			got := bundle.AngieStack()
+			got := bundle.ReverseProxyStack()
 			if !tc.wantMatch {
 				if got != nil {
-					t.Fatalf("expected nil AngieStack, got %+v", got)
+					t.Fatalf("expected nil ReverseProxyStack, got %+v", got)
 				}
 				return
 			}
 			if got == nil || got.Name != tc.stackName {
-				t.Fatalf("expected AngieStack %q, got %+v", tc.stackName, got)
+				t.Fatalf("expected ReverseProxyStack %q, got %+v", tc.stackName, got)
 			}
 		})
 	}
@@ -154,44 +155,23 @@ func TestStackConfigRemoteCountFor(t *testing.T) {
 	}
 }
 
-func TestGlobalAngieConfigResolveStreamDir(t *testing.T) {
+func TestStackReverseProxyHasAssets(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name     string
-		cfg      GlobalAngieConfig
-		expected string
-	}{
-		{
-			name: "explicit stream dir",
-			cfg: GlobalAngieConfig{
-				StreamDir:  "/etc/angie/stream-custom",
-				DomainsDir: "/etc/angie/domains",
-			},
-			expected: "/etc/angie/stream-custom",
-		},
-		{
-			name: "derived from domains dir",
-			cfg: GlobalAngieConfig{
-				DomainsDir: "/etc/angie/domains",
-			},
-			expected: "/etc/angie/stream",
-		},
-		{
-			name:     "empty when both absent",
-			cfg:      GlobalAngieConfig{},
-			expected: "",
-		},
+	var nilCfg *StackReverseProxyConfig
+	if nilCfg.HasAssets() {
+		t.Fatal("expected nil config HasAssets() = false")
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := tc.cfg.ResolveStreamDir()
-			if got != tc.expected {
-				t.Fatalf("expected stream dir %q, got %q", tc.expected, got)
-			}
-		})
+	if (&StackReverseProxyConfig{}).HasAssets() {
+		t.Fatal("expected empty config HasAssets() = false")
+	}
+	if !(&StackReverseProxyConfig{DomainConfs: []string{"app.example.com.conf"}}).HasAssets() {
+		t.Fatal("expected DomainConfs HasAssets() = true")
+	}
+	if !(&StackReverseProxyConfig{StreamConfs: []string{"app.example.com.inc"}}).HasAssets() {
+		t.Fatal("expected StreamConfs HasAssets() = true")
+	}
+	if !(&StackReverseProxyConfig{ACMENames: []string{"portal"}}).HasAssets() {
+		t.Fatal("expected ACMENames HasAssets() = true")
 	}
 }

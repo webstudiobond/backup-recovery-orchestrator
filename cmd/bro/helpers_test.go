@@ -113,6 +113,7 @@ func writeFixtureConfig(t *testing.T, root string) string {
 	globalJSON := `{
   "backup_root": "` + filepath.Join(root, "backups") + `",
   "lock_file": "` + filepath.Join(root, "bro.lock") + `",
+  "reverse_proxy_stack": "angie",
   "destinations": [
     {
       "name": "remote-drive",
@@ -145,7 +146,7 @@ func writeFixtureConfig(t *testing.T, root string) string {
 		t.Fatalf("write profile: %v", err)
 	}
 
-	stackJSON := `{"extends":"base","user":{"name":"app-alpha","uid":1012,"gid":1012},"stack_dir":"` + alphaHome + `","angie":{"domain_confs":["status.example.com.conf"]}}`
+	stackJSON := `{"extends":"base","user":{"name":"app-alpha","uid":1012,"gid":1012},"stack_dir":"` + alphaHome + `","reverse_proxy":{"domain_confs":["status.example.com.conf"]}}`
 	if err := os.WriteFile(filepath.Join(confDir, "app-alpha.json"), []byte(stackJSON), 0o600); err != nil {
 		t.Fatalf("write stack: %v", err)
 	}
@@ -153,6 +154,11 @@ func writeFixtureConfig(t *testing.T, root string) string {
 	rootStackJSON := `{"extends":"base","user":{"name":"root","uid":0,"gid":0},"stack_dir":"` + rootHome + `"}`
 	if err := os.WriteFile(filepath.Join(confDir, "app-root.json"), []byte(rootStackJSON), 0o600); err != nil {
 		t.Fatalf("write root stack: %v", err)
+	}
+
+	reverseProxyStackJSON := `{"enabled":false,"user":{"name":"angie","uid":1001,"gid":1001},"stack_dir":"` + filepath.Join(homeDir, "angie") + `","reverse_proxy_provider":{"type":"angie","service_name":"angie","certs_dir":"data/certs","domains_dir":"data/conf.d/domains","stream_dir":"data/conf.d/stream"}}`
+	if err := os.WriteFile(filepath.Join(confDir, "angie.json"), []byte(reverseProxyStackJSON), 0o600); err != nil {
+		t.Fatalf("write reverse-proxy stack: %v", err)
 	}
 
 	return cfgPath

@@ -207,7 +207,7 @@ func copyDirectoryContents(srcDir, dstDir string) error {
 			return walkErr
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("refusing symlink %q in angie asset tree", path)
+			return fmt.Errorf("refusing symlink %q in reverse-proxy asset tree", path)
 		}
 		rel, relErr := filepathRel(cleanSrc, path)
 		if relErr != nil {
@@ -240,7 +240,10 @@ func copyPlainFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("read %q: %w", src, err)
 	}
+	return writeBytesToOSFile(dst, data, mode)
+}
 
+func writeBytesToOSFile(dst string, data []byte, mode os.FileMode) error {
 	cleanDst := filepath.Clean(dst)
 	dstDir := filepath.Dir(cleanDst)
 	if mkErr := os.MkdirAll(dstDir, 0o750); mkErr != nil {

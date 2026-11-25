@@ -22,10 +22,10 @@ func TestStageAssembleVerifyAndUnpack(t *testing.T) {
 	root := t.TempDir()
 	stagingDir := filepath.Join(root, "staging")
 
-	globalAngie, stackAngie := prepareAngieFixtures(t, root)
+	reverseProxyStack, stackReverseProxy := prepareReverseProxyFixtures(t, root)
 
-	if err := StageAngieAssets(ctx, &globalAngie, &stackAngie, stagingDir); err != nil {
-		t.Fatalf("StageAngieAssets error: %v", err)
+	if err := StageReverseProxyAssets(ctx, &reverseProxyStack, &stackReverseProxy, stagingDir); err != nil {
+		t.Fatalf("StageReverseProxyAssets error: %v", err)
 	}
 	const testStamp = "2026-11-16_12-00-00"
 	filesName := StackFilesArchiveName("app-beta", testStamp)
@@ -47,7 +47,7 @@ func TestStageAssembleVerifyAndUnpack(t *testing.T) {
 		ComposeFile:  "/home/app-beta/docker-compose.yaml",
 		FilesArchive: filesName,
 		User:         config.UserConfig{Name: "app-beta", UID: 1015, GID: 1015},
-		Angie:        stackAngie,
+		ReverseProxy: stackReverseProxy,
 	}
 
 	containerPath := filepath.Join(root, "backups", "app-beta_"+testStamp+".tar")

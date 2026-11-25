@@ -78,9 +78,9 @@ func TestRestoreValidationAndErrors(t *testing.T) {
 		{
 			ctx:     ctx,
 			global:  &bundle.Global,
-			opts:    &RestoreOptions{ArchivePath: archivePath, AngieMode: "invalid-angie-mode"},
-			name:    "angie selection error",
-			wantErr: "unsupported angie restore mode",
+			opts:    &RestoreOptions{ArchivePath: archivePath, ReverseProxyMode: "invalid-proxy-mode"},
+			name:    "reverse-proxy selection error",
+			wantErr: "unsupported reverse-proxy restore mode",
 		},
 		{
 			ctx:     ctx,
@@ -96,6 +96,13 @@ func TestRestoreValidationAndErrors(t *testing.T) {
 			name:    "no steps remaining after filtering",
 			wantErr: "no restore steps selected after filtering",
 		},
+		{
+			ctx:     ctx,
+			global:  &bundle.Global,
+			opts:    &RestoreOptions{ArchivePath: archivePath, ReverseProxyMode: RestoreModeAll},
+			name:    "missing reverse_proxy_stack fails fast before restore",
+			wantErr: "global reverse_proxy_stack provider is required to deploy reverse-proxy assets",
+		},
 	}
 
 	for _, tc := range cases {
@@ -106,6 +113,16 @@ func TestRestoreValidationAndErrors(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 			}
 		})
+	}
+
+	if err := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
+		ArchivePath:      archivePath,
+		ReverseProxyMode: RestoreModeAll,
+		OnlySteps:        []string{bundle.Stacks[0].RestoreSteps[0].Action},
+		DryRun:           true,
+		Out:              io.Discard,
+	}); err != nil {
+		t.Fatalf("expected restore dry-run without reverse_proxy_stack to succeed when deploy_reverse_proxy is skipped, got %v", err)
 	}
 }
 
@@ -178,9 +195,10 @@ func TestRestoreDryRunAndSuccess(t *testing.T) {
 
 	var runBuf bytes.Buffer
 	runErr := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
-		ArchivePath: archivePath,
-		AngieMode:   RestoreModeAll,
-		Out:         &runBuf,
+		ArchivePath:       archivePath,
+		ReverseProxyStack: bundle.ReverseProxyStack(),
+		ReverseProxyMode:  RestoreModeAll,
+		Out:               &runBuf,
 	})
 	if runErr != nil {
 		t.Fatalf("expected restore success, got %v", runErr)

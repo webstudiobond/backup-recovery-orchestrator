@@ -26,11 +26,7 @@ func TestLoadBundleWithProfilesAndOverrides(t *testing.T) {
     "snapshot_size": "35G",
     "mount_point": "/mnt/home_snap"
   },
-  "angie": {
-    "compose_file": "/home/angie/docker-compose.yaml",
-    "certs_dir": "/home/angie/data/certs",
-    "domains_dir": "/home/angie/data/conf.d/domains"
-  },
+  "reverse_proxy_stack": "edge-proxy",
   "retention": {
     "local_count": 3,
     "remote_count": 7
@@ -66,7 +62,7 @@ func TestLoadBundleWithProfilesAndOverrides(t *testing.T) {
     { "action": "compose_down" },
     { "action": "extract_files" },
     { "action": "apply_dac" },
-    { "action": "deploy_angie" },
+    { "action": "deploy_reverse_proxy" },
     { "action": "compose_up" },
     { "action": "wait_healthy" }
   ]
@@ -99,7 +95,7 @@ func TestLoadBundleWithProfilesAndOverrides(t *testing.T) {
     { "action": "compose_down" },
     { "action": "extract_files" },
     { "action": "apply_dac" },
-    { "action": "deploy_angie" },
+    { "action": "deploy_reverse_proxy" },
     { "action": "compose_up", "services": ["postgres"] },
     { "action": "wait_healthy", "services": ["postgres"] },
     { "action": "db_import" },
@@ -125,7 +121,7 @@ func TestLoadBundleWithProfilesAndOverrides(t *testing.T) {
   "host_files": [
     { "path": "/etc/logrotate.d/app-alpha", "owner": "root:root", "file_mode": "0400", "optional": true }
   ],
-  "angie": {
+  "reverse_proxy": {
     "acme_names": ["app-alpha"],
     "domain_confs": ["alpha.example.com.conf"]
   }
@@ -149,10 +145,22 @@ func TestLoadBundleWithProfilesAndOverrides(t *testing.T) {
       { "action": "remove_path", "path": "/home/app-beta/daemon/data/backup_checkpoint" }
     ]
   },
-  "angie": {
+  "reverse_proxy": {
     "acme_names": ["beta", "webui"],
     "domain_confs": ["beta.example.net.conf", "webui.example.org.conf"],
     "stream_confs": ["beta-turn.inc"]
+  }
+}`)
+
+	writeTestFile(t, filepath.Join(root, "conf.d", "edge-proxy.json"), `{
+  "user": { "name": "edge", "uid": 1020, "gid": 1020 },
+  "stack_dir": "/srv/edge-proxy",
+  "reverse_proxy_provider": {
+    "type": "angie",
+    "service_name": "angie-edge",
+    "certs_dir": "data/certs",
+    "domains_dir": "data/conf.d/domains",
+    "stream_dir": "data/conf.d/stream"
   }
 }`)
 
@@ -161,8 +169,12 @@ func TestLoadBundleWithProfilesAndOverrides(t *testing.T) {
 		t.Fatalf("unexpected error loading bundle: %v", err)
 	}
 
-	if bundle.Global.Angie.ServiceName != DefaultAngieService {
-		t.Fatalf("expected default angie service %q, got %q", DefaultAngieService, bundle.Global.Angie.ServiceName)
+	if bundle.Global.ReverseProxyStack != "edge-proxy" {
+		t.Fatalf("expected reverse_proxy_stack edge-proxy, got %q", bundle.Global.ReverseProxyStack)
+	}
+	reverseProxyStack := bundle.ReverseProxyStack()
+	if reverseProxyStack == nil || reverseProxyStack.ReverseProxyProvider == nil || reverseProxyStack.ReverseProxyProvider.ServiceName != "angie-edge" {
+		t.Fatalf("expected resolved reverse proxy provider, got %+v", reverseProxyStack)
 	}
 	if bundle.Global.Timezone != DefaultTimezone {
 		t.Fatalf("expected default timezone %q, got %q", DefaultTimezone, bundle.Global.Timezone)
@@ -170,8 +182,8 @@ func TestLoadBundleWithProfilesAndOverrides(t *testing.T) {
 	if len(bundle.Global.Destinations) != 2 || bundle.Global.Destinations[0].WaitTimeoutSec != DefaultWaitTimeoutSec {
 		t.Fatalf("unexpected destination defaults: %+v", bundle.Global.Destinations)
 	}
-	if len(bundle.Stacks) != 2 {
-		t.Fatalf("expected 2 stacks, got %d", len(bundle.Stacks))
+	if len(bundle.Stacks) != 3 {
+		t.Fatalf("expected 3 stacks, got %d", len(bundle.Stacks))
 	}
 
 	assertAlphaStack(t, &bundle, &bundle.Stacks[0])
@@ -449,5 +461,17 @@ func TestLoadGlobalStandalone(t *testing.T) {
 	}`)
 	if _, err := LoadGlobal(ctx, invalidCfgPath); err == nil {
 		t.Fatal("expected validation error for max_archive_gb=0")
+	}
+}
+
+func TestLoadExampleConfigs(t *testing.T) {
+	t.Parallel()
+
+	bundle, err := LoadBundle(context.Background(), filepath.Join("..", "..", "examples", "etc", "bro", "config.json"))
+	if err != nil {
+		t.Fatalf("expected example bundle to load cleanly, got: %v", err)
+	}
+	if bundle.ReverseProxyStack() == nil {
+		t.Fatal("expected example bundle to define a reverse_proxy_stack")
 	}
 }

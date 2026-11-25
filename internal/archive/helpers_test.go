@@ -14,6 +14,7 @@ import (
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/cmdexec"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/reverseproxy"
 )
 
 type recordedTarCall struct {
@@ -80,12 +81,13 @@ func (f *fakeArchiveRunner) Output(_ context.Context, _ *cmdexec.Spec) ([]byte, 
 	return nil, nil
 }
 
-func prepareAngieFixtures(t *testing.T, root string) (config.GlobalAngieConfig, config.StackAngieConfig) {
+func prepareReverseProxyFixtures(t *testing.T, root string) (config.StackConfig, config.StackReverseProxyConfig) {
 	t.Helper()
 
-	domainsDir := filepath.Join(root, "angie", "domains")
-	streamDir := filepath.Join(root, "angie", "stream")
-	certsDir := filepath.Join(root, "angie", "certs", "svc-chat")
+	reverseProxyStackDir := filepath.Join(root, "reverse-proxy-stack")
+	domainsDir := filepath.Join(reverseProxyStackDir, "data", "conf.d", "domains")
+	streamDir := filepath.Join(reverseProxyStackDir, "data", "conf.d", "stream")
+	certsDir := filepath.Join(reverseProxyStackDir, "data", "certs", "svc-chat")
 
 	if err := os.MkdirAll(domainsDir, 0o750); err != nil {
 		t.Fatalf("mkdir domains: %v", err)
@@ -111,10 +113,17 @@ func prepareAngieFixtures(t *testing.T, root string) (config.GlobalAngieConfig, 
 		t.Fatalf("write cert: %v", err)
 	}
 
-	return config.GlobalAngieConfig{
-		DomainsDir: domainsDir,
-		CertsDir:   filepath.Dir(certsDir),
-	}, config.StackAngieConfig{
+	return config.StackConfig{
+		Name:     "reverse-proxy-host",
+		StackDir: reverseProxyStackDir,
+		ReverseProxyProvider: &config.ReverseProxyProviderConfig{
+			Type:        reverseproxy.TypeAngie,
+			ServiceName: "edge-proxy",
+			DomainsDir:  "data/conf.d/domains",
+			StreamDir:   "data/conf.d/stream",
+			CertsDir:    "data/certs",
+		},
+	}, config.StackReverseProxyConfig{
 		ACMENames:   []string{"svc-chat"},
 		DomainConfs: []string{"chat.example.com.conf"},
 		StreamConfs: []string{"rtc-turn.inc"},

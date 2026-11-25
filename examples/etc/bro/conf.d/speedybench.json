@@ -10,7 +10,7 @@
     { "path": ".", "owner": "root:stack", "dir_mode": "0750" },
     { "path": "docker-compose.yaml", "owner": "root:root", "file_mode": "0600" }
   ],
-  "angie": {
+  "reverse_proxy": {
     "acme_names": ["speedybench"],
     "domain_confs": ["speedybench.example.com.conf"]
   },
@@ -18,7 +18,7 @@
     { "action": "compose_down" },
     { "action": "extract_files" },
     { "action": "apply_dac" },
-    { "action": "deploy_angie" },
+    { "action": "deploy_reverse_proxy" },
     { "action": "compose_up" },
     { "action": "wait_healthy" }
   ]

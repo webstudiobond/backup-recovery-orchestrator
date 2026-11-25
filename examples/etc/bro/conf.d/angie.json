@@ -1,6 +1,13 @@
 {
   "enabled": true,
   "user": { "name": "angie", "uid": 1001, "gid": 1001 },
+  "reverse_proxy_provider": {
+    "type": "angie",
+    "service_name": "angie",
+    "certs_dir": "data/certs",
+    "domains_dir": "data/conf.d/domains",
+    "stream_dir": "data/conf.d/stream"
+  },
   "files": {
     "no_wildcards_match_slash": true,
     "excludes": [

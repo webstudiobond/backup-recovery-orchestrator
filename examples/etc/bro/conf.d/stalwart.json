@@ -32,7 +32,7 @@
       }
     }
   ],
-  "angie": {
+  "reverse_proxy": {
     "acme_names": ["stalwart", "autoconfig", "autodiscover", "mta-sts"],
     "domain_confs": ["stalwart.conf", "autoconfig.conf", "autodiscover.conf", "mta-sts.conf"]
   },
@@ -40,7 +40,7 @@
     { "action": "compose_down" },
     { "action": "extract_files" },
     { "action": "apply_dac" },
-    { "action": "deploy_angie" },
+    { "action": "deploy_reverse_proxy" },
     { "action": "compose_up", "services": ["postgres"] },
     { "action": "wait_healthy", "services": ["postgres"] },
     { "action": "db_import" },

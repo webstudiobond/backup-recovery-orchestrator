@@ -10,26 +10,28 @@ import (
 	"testing"
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/reverseproxy"
 )
 
-func TestStageAngieAssets(t *testing.T) {
+func TestStageReverseProxyAssets(t *testing.T) {
 	t.Parallel()
 
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	root := t.TempDir()
-	domainsDir := filepath.Join(root, "angie_domains")
+	reverseProxyStackDir := filepath.Join(root, "reverse_proxy_stack")
+	domainsDir := filepath.Join(reverseProxyStackDir, "data", "domains")
 	if err := os.MkdirAll(domainsDir, 0o750); err != nil {
 		t.Fatalf("mkdir domains: %v", err)
 	}
-	for _, conf := range []string{"app.conf", "app-fallback.conf", "app-main.conf"} {
+	for _, conf := range []string{"app.conf", "app-fallback.conf", "app-main.conf", "app-alt.conf"} {
 		if err := os.WriteFile(filepath.Join(domainsDir, conf), []byte("server {}"), 0o600); err != nil {
 			t.Fatalf("write %s: %v", conf, err)
 		}
 	}
 
-	streamDir := filepath.Join(root, "angie_stream")
+	streamDir := filepath.Join(reverseProxyStackDir, "data", "stream")
 	if err := os.MkdirAll(streamDir, 0o750); err != nil {
 		t.Fatalf("mkdir stream: %v", err)
 	}
@@ -37,7 +39,7 @@ func TestStageAngieAssets(t *testing.T) {
 		t.Fatalf("write stream.inc: %v", err)
 	}
 
-	certsDir := filepath.Join(root, "angie_certs", "site1")
+	certsDir := filepath.Join(reverseProxyStackDir, "data", "certs", "site1")
 	if err := os.MkdirAll(certsDir, 0o750); err != nil {
 		t.Fatalf("mkdir certs: %v", err)
 	}
@@ -45,85 +47,95 @@ func TestStageAngieAssets(t *testing.T) {
 		t.Fatalf("write cert: %v", err)
 	}
 
-	validGlobal := &config.GlobalAngieConfig{
-		DomainsDir: domainsDir,
-		StreamDir:  streamDir,
-		CertsDir:   filepath.Dir(certsDir),
+	makeReverseProxyStack := func(name, stackDir, domainsRel, streamRel, certsRel string) *config.StackConfig {
+		return &config.StackConfig{
+			Name:     name,
+			StackDir: stackDir,
+			ReverseProxyProvider: &config.ReverseProxyProviderConfig{
+				Type:        reverseproxy.TypeAngie,
+				ServiceName: "reverse-proxy-" + name,
+				DomainsDir:  domainsRel,
+				StreamDir:   streamRel,
+				CertsDir:    certsRel,
+			},
+		}
 	}
+	validStack := makeReverseProxyStack("host", reverseProxyStackDir, "data/domains", "data/stream", "data/certs")
 
 	tests := []struct {
-		ctx         context.Context
-		globalAngie *config.GlobalAngieConfig
-		stackAngie  *config.StackAngieConfig
-		name        string
-		stagingDir  string
-		wantErr     bool
+		ctx               context.Context
+		reverseProxyStack *config.StackConfig
+		stackReverseProxy *config.StackReverseProxyConfig
+		name              string
+		stagingDir        string
+		wantErr           bool
 	}{
 		{
-			ctx:         canceledCtx,
-			globalAngie: validGlobal,
-			stackAngie:  &config.StackAngieConfig{DomainConfs: []string{"app.conf"}},
-			name:        "canceled_context_returns_error",
-			stagingDir:  filepath.Join(root, "stg1"),
-			wantErr:     true,
+			ctx:               canceledCtx,
+			reverseProxyStack: validStack,
+			stackReverseProxy: &config.StackReverseProxyConfig{DomainConfs: []string{"app.conf"}},
+			name:              "canceled_context_returns_error",
+			stagingDir:        filepath.Join(root, "stg1"),
+			wantErr:           true,
 		},
 		{
-			ctx:         context.Background(),
-			globalAngie: validGlobal,
-			stackAngie:  &config.StackAngieConfig{},
-			name:        "no_assets_configured_returns_nil",
-			stagingDir:  filepath.Join(root, "stg2"),
-			wantErr:     false,
+			ctx:               context.Background(),
+			reverseProxyStack: validStack,
+			stackReverseProxy: &config.StackReverseProxyConfig{},
+			name:              "no_assets_configured_returns_nil",
+			stagingDir:        filepath.Join(root, "stg2"),
+			wantErr:           false,
 		},
 		{
-			ctx: context.Background(),
-			globalAngie: &config.GlobalAngieConfig{
-				DomainsDir: "",
-			},
-			stackAngie: &config.StackAngieConfig{
-				DomainConfs: []string{"app-fallback.conf"},
-			},
-			name:       "missing_domains_dir_returns_error",
-			stagingDir: filepath.Join(root, "stg3"),
-			wantErr:    true,
+			ctx:               context.Background(),
+			reverseProxyStack: nil,
+			stackReverseProxy: &config.StackReverseProxyConfig{DomainConfs: []string{"app-fallback.conf"}},
+			name:              "missing_reverse_proxy_stack_returns_error",
+			stagingDir:        filepath.Join(root, "stg3"),
+			wantErr:           true,
 		},
 		{
-			ctx: context.Background(),
-			globalAngie: &config.GlobalAngieConfig{
-				DomainsDir: domainsDir,
-				StreamDir:  "",
-			},
-			stackAngie: &config.StackAngieConfig{
-				StreamConfs: []string{"stream.inc"},
-			},
-			name:       "missing_stream_dir_returns_error",
-			stagingDir: filepath.Join(root, "stg4"),
-			wantErr:    true,
+			ctx:               context.Background(),
+			reverseProxyStack: makeReverseProxyStack("missing-dir", filepath.Join(root, "missing_reverse_proxy_stack"), "d", "", "c"),
+			stackReverseProxy: &config.StackReverseProxyConfig{DomainConfs: []string{"app-missing.conf"}},
+			name:              "missing_reverse_proxy_stack_dir_returns_error",
+			stagingDir:        filepath.Join(root, "stg4"),
+			wantErr:           true,
 		},
 		{
-			ctx: context.Background(),
-			globalAngie: &config.GlobalAngieConfig{
-				DomainsDir: domainsDir,
-				StreamDir:  streamDir,
-				CertsDir:   "",
-			},
-			stackAngie: &config.StackAngieConfig{
-				ACMENames: []string{"site1"},
-			},
-			name:       "missing_certs_dir_returns_error",
-			stagingDir: filepath.Join(root, "stg5"),
-			wantErr:    true,
+			ctx:               context.Background(),
+			reverseProxyStack: makeReverseProxyStack("no-domains", reverseProxyStackDir, "", "", "c"),
+			stackReverseProxy: &config.StackReverseProxyConfig{DomainConfs: []string{"app-alt.conf"}},
+			name:              "missing_domains_dir_returns_error",
+			stagingDir:        filepath.Join(root, "stg5"),
+			wantErr:           true,
 		},
 		{
-			ctx:         context.Background(),
-			globalAngie: validGlobal,
-			stackAngie: &config.StackAngieConfig{
+			ctx:               context.Background(),
+			reverseProxyStack: makeReverseProxyStack("no-stream", reverseProxyStackDir, "d", "", "c"),
+			stackReverseProxy: &config.StackReverseProxyConfig{StreamConfs: []string{"stream.inc"}},
+			name:              "missing_stream_dir_returns_error",
+			stagingDir:        filepath.Join(root, "stg6"),
+			wantErr:           true,
+		},
+		{
+			ctx:               context.Background(),
+			reverseProxyStack: makeReverseProxyStack("no-certs", reverseProxyStackDir, "d", "s", ""),
+			stackReverseProxy: &config.StackReverseProxyConfig{ACMENames: []string{"site1"}},
+			name:              "missing_certs_dir_returns_error",
+			stagingDir:        filepath.Join(root, "stg7"),
+			wantErr:           true,
+		},
+		{
+			ctx:               context.Background(),
+			reverseProxyStack: validStack,
+			stackReverseProxy: &config.StackReverseProxyConfig{
 				DomainConfs: []string{"app-main.conf"},
 				StreamConfs: []string{"stream.inc"},
 				ACMENames:   []string{"site1"},
 			},
 			name:       "all_assets_staged_successfully",
-			stagingDir: filepath.Join(root, "stg6"),
+			stagingDir: filepath.Join(root, "stg8"),
 			wantErr:    false,
 		},
 	}
@@ -131,25 +143,36 @@ func TestStageAngieAssets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := StageAngieAssets(tt.ctx, tt.globalAngie, tt.stackAngie, tt.stagingDir)
+			err := StageReverseProxyAssets(tt.ctx, tt.reverseProxyStack, tt.stackReverseProxy, tt.stagingDir)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("StageAngieAssets error = %v, wantErr = %v", err, tt.wantErr)
+				t.Fatalf("StageReverseProxyAssets error = %v, wantErr = %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func TestStageAngieConfFiles(t *testing.T) {
+func TestOpenReverseProxySubRootAndConfFiles(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	srcDir := filepath.Join(root, "confs_src")
+	reverseProxyDir := filepath.Join(root, "reverse_proxy")
+	srcDir := filepath.Join(reverseProxyDir, "confs_src")
 	if err := os.MkdirAll(srcDir, 0o750); err != nil {
 		t.Fatalf("mkdir confs_src: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(srcDir, "valid.conf"), []byte("content"), 0o600); err != nil {
 		t.Fatalf("write valid.conf: %v", err)
 	}
+
+	reverseProxyRoot, err := os.OpenRoot(reverseProxyDir)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := reverseProxyRoot.Close(); closeErr != nil {
+			t.Errorf("close reverseProxyRoot: %v", closeErr)
+		}
+	})
 
 	blockerFile := filepath.Join(root, "file_blocker")
 	if err := os.WriteFile(blockerFile, []byte("data"), 0o600); err != nil {
@@ -158,7 +181,7 @@ func TestStageAngieConfFiles(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		srcDir     string
+		srcRelDir  string
 		dstDir     string
 		confNames  []string
 		emptyNames bool
@@ -166,58 +189,80 @@ func TestStageAngieConfFiles(t *testing.T) {
 	}{
 		{
 			name:       "empty_conf_names_returns_nil",
-			srcDir:     srcDir,
+			srcRelDir:  "unused_dir",
 			dstDir:     filepath.Join(root, "dst1"),
 			emptyNames: true,
 			wantErr:    false,
 		},
 		{
-			name:    "empty_src_dir_returns_error",
-			srcDir:  "   ",
-			dstDir:  filepath.Join(root, "dst2"),
-			wantErr: true,
+			name:      "empty_src_dir_returns_error",
+			srcRelDir: "   ",
+			dstDir:    filepath.Join(root, "dst2"),
+			wantErr:   true,
 		},
 		{
-			name:    "mkdir_dst_dir_failure",
-			srcDir:  srcDir,
-			dstDir:  filepath.Join(blockerFile, "child"),
-			wantErr: true,
+			name:      "absolute_src_dir_returns_error",
+			srcRelDir: "/etc/proxy/domains",
+			dstDir:    filepath.Join(root, "dst_abs"),
+			wantErr:   true,
+		},
+		{
+			name:      "dot_src_dir_returns_error",
+			srcRelDir: ".",
+			dstDir:    filepath.Join(root, "dst_dot"),
+			wantErr:   true,
+		},
+		{
+			name:      "missing_rel_dir_returns_error",
+			srcRelDir: "no_such_dir",
+			dstDir:    filepath.Join(root, "dst_missing_dir"),
+			wantErr:   true,
+		},
+		{
+			name:      "mkdir_dst_dir_failure",
+			srcRelDir: "",
+			dstDir:    filepath.Join(blockerFile, "child"),
+			wantErr:   true,
 		},
 		{
 			name:      "missing_conf_file_in_src_returns_error",
-			srcDir:    srcDir,
+			srcRelDir: "",
 			dstDir:    filepath.Join(root, "dst3"),
 			confNames: []string{"nonexistent.conf"},
 			wantErr:   true,
 		},
 		{
-			name:    "successful_conf_copy",
-			srcDir:  srcDir,
-			dstDir:  filepath.Join(root, "dst4"),
-			wantErr: false,
+			name:      "successful_conf_copy",
+			srcRelDir: "",
+			dstDir:    filepath.Join(root, "dst4"),
+			wantErr:   false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			srcRelDir := tt.srcRelDir
+			if srcRelDir == "" {
+				srcRelDir = "confs_src"
+			}
 			confNames := tt.confNames
 			if !tt.emptyNames && len(confNames) == 0 {
 				confNames = []string{"valid.conf"}
 			}
-			err := stageAngieConfFiles(tt.srcDir, confNames, tt.dstDir, "domains_dir", "domain")
+			err := stageReverseProxyConfFiles(reverseProxyRoot, srcRelDir, confNames, tt.dstDir, "domains_dir", "domain")
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("stageAngieConfFiles error = %v, wantErr = %v", err, tt.wantErr)
+				t.Fatalf("stageReverseProxyConfFiles error = %v, wantErr = %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func TestStageAngieCerts(t *testing.T) {
-	t.Parallel()
+func setupStageReverseProxyCertsDir(t *testing.T, root string) *os.Root {
+	t.Helper()
 
-	root := t.TempDir()
-	certsBase := filepath.Join(root, "certs_root")
+	reverseProxyDir := filepath.Join(root, "reverse_proxy")
+	certsBase := filepath.Join(reverseProxyDir, "certs_root")
 	certDir := filepath.Join(certsBase, "svc-web")
 	if err := os.MkdirAll(certDir, 0o750); err != nil {
 		t.Fatalf("mkdir certDir: %v", err)
@@ -239,69 +284,113 @@ func TestStageAngieCerts(t *testing.T) {
 		t.Fatalf("write fileAsCertDir: %v", err)
 	}
 
+	reverseProxyRoot, err := os.OpenRoot(reverseProxyDir)
+	if err != nil {
+		t.Fatalf("open reverseProxyRoot: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := reverseProxyRoot.Close(); closeErr != nil {
+			t.Errorf("close reverseProxyRoot: %v", closeErr)
+		}
+	})
+	return reverseProxyRoot
+}
+
+func TestStageReverseProxyCerts(t *testing.T) {
+	root := t.TempDir()
+	reverseProxyRoot := setupStageReverseProxyCertsDir(t, root)
+
+	origOpenSub := rootOpenSubRoot
+	t.Cleanup(func() {
+		rootOpenSubRoot = origOpenSub
+	})
+
 	tests := []struct {
+		setupMock  func()
 		name       string
-		certsDir   string
+		certsRel   string
 		dstBaseDir string
 		acmeNames  []string
+		emptyCerts bool
 		wantErr    bool
 	}{
 		{
 			name:       "empty_acme_names_returns_nil",
-			certsDir:   certsBase,
+			certsRel:   "unused_certs",
 			dstBaseDir: filepath.Join(root, "out_certs1"),
 			acmeNames:  nil,
 			wantErr:    false,
 		},
 		{
 			name:       "empty_certs_dir_returns_error",
-			certsDir:   "",
+			emptyCerts: true,
 			dstBaseDir: filepath.Join(root, "out_certs2"),
-			acmeNames:  []string{"svc-web"},
+			acmeNames:  []string{"svc-web-empty"},
 			wantErr:    true,
 		},
 		{
 			name:       "nonexistent_cert_dir_returns_error",
-			certsDir:   certsBase,
 			dstBaseDir: filepath.Join(root, "out_certs3"),
 			acmeNames:  []string{"nonexistent-svc"},
 			wantErr:    true,
 		},
 		{
 			name:       "cert_dir_is_regular_file_returns_error",
-			certsDir:   certsBase,
 			dstBaseDir: filepath.Join(root, "out_certs4"),
 			acmeNames:  []string{"file_as_cert"},
 			wantErr:    true,
 		},
 		{
+			name: "open_acme_subroot_failure",
+			setupMock: func() {
+				calls := 0
+				rootOpenSubRoot = func(r *os.Root, name string) (*os.Root, error) {
+					calls++
+					if calls == 2 {
+						return nil, errors.New("simulated open subroot failure")
+					}
+					return r.OpenRoot(name)
+				}
+			},
+			dstBaseDir: filepath.Join(root, "out_certs_suberr"),
+			wantErr:    true,
+		},
+		{
 			name:       "symlink_in_cert_dir_triggers_copy_error",
-			certsDir:   certsBase,
 			dstBaseDir: filepath.Join(root, "out_certs5"),
 			acmeNames:  []string{"svc-symlink"},
 			wantErr:    true,
 		},
 		{
 			name:       "successful_cert_staging",
-			certsDir:   certsBase,
 			dstBaseDir: filepath.Join(root, "out_certs6"),
-			acmeNames:  []string{"svc-web"},
 			wantErr:    false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			err := stageAngieCerts(tt.certsDir, tt.acmeNames, tt.dstBaseDir)
+			rootOpenSubRoot = origOpenSub
+			if tt.setupMock != nil {
+				tt.setupMock()
+			}
+			certsRel := tt.certsRel
+			if certsRel == "" && !tt.emptyCerts {
+				certsRel = "certs_root"
+			}
+			acmeNames := tt.acmeNames
+			if tt.name != "empty_acme_names_returns_nil" && len(acmeNames) == 0 {
+				acmeNames = []string{"svc-web"}
+			}
+			err := stageReverseProxyCerts(reverseProxyRoot, certsRel, acmeNames, tt.dstBaseDir)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("stageAngieCerts error = %v, wantErr = %v", err, tt.wantErr)
+				t.Fatalf("stageReverseProxyCerts error = %v, wantErr = %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func TestCopyDirTree(t *testing.T) {
+func TestCopyRootDirTree(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -331,33 +420,43 @@ func TestCopyDirTree(t *testing.T) {
 		t.Fatalf("write file conflict: %v", err)
 	}
 
+	openTestRoot := func(dir string) *os.Root {
+		r, err := os.OpenRoot(dir)
+		if err != nil {
+			t.Fatalf("open root %q: %v", dir, err)
+		}
+		t.Cleanup(func() {
+			if cErr := r.Close(); cErr != nil {
+				t.Errorf("close root %q: %v", dir, cErr)
+			}
+		})
+		return r
+	}
+
+	srcRoot := openTestRoot(sourceDir)
+	symlinkRoot := openTestRoot(symlinkDir)
+
 	tests := []struct {
+		srcRoot *os.Root
 		name    string
-		srcDir  string
 		dstDir  string
 		wantErr bool
 	}{
 		{
-			name:    "nonexistent_source_returns_error",
-			srcDir:  filepath.Join(root, "nonexistent_tree"),
-			dstDir:  filepath.Join(root, "dst_tree1"),
-			wantErr: true,
-		},
-		{
+			srcRoot: symlinkRoot,
 			name:    "symlink_in_source_returns_error",
-			srcDir:  symlinkDir,
 			dstDir:  filepath.Join(root, "dst_tree2"),
 			wantErr: true,
 		},
 		{
+			srcRoot: srcRoot,
 			name:    "mkdir_failure_when_dst_has_conflicting_file",
-			srcDir:  sourceDir,
 			dstDir:  conflictDst,
 			wantErr: true,
 		},
 		{
+			srcRoot: srcRoot,
 			name:    "successful_copy_dir_tree",
-			srcDir:  sourceDir,
 			dstDir:  filepath.Join(root, "dst_tree3"),
 			wantErr: false,
 		},
@@ -366,40 +465,48 @@ func TestCopyDirTree(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := copyDirTree(tt.srcDir, tt.dstDir)
+			err := copyRootDirTree(tt.srcRoot, tt.dstDir)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("copyDirTree error = %v, wantErr = %v", err, tt.wantErr)
+				t.Fatalf("copyRootDirTree error = %v, wantErr = %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func TestCopyRegularFile(t *testing.T) {
+func TestCopyRootRegularFile(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	validSrc := filepath.Join(root, "valid.src")
-	if err := os.WriteFile(validSrc, []byte("file content"), 0o600); err != nil {
-		t.Fatalf("write valid.src: %v", err)
+	srcRootDir := filepath.Join(root, "src_root")
+	if err := os.MkdirAll(srcRootDir, 0o750); err != nil {
+		t.Fatalf("mkdir src_root: %v", err)
 	}
-
-	symlinkSrc := filepath.Join(root, "symlink.src")
-	if err := os.Symlink(validSrc, symlinkSrc); err != nil {
+	if err := os.WriteFile(filepath.Join(srcRootDir, "valid.src"), []byte("file content"), 0o600); err != nil {
+		t.Fatalf("write valid file: %v", err)
+	}
+	if err := os.Symlink("valid.src", filepath.Join(srcRootDir, "symlink.src")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
-
-	dirSrc := filepath.Join(root, "dir.src")
-	if err := os.MkdirAll(dirSrc, 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Join(srcRootDir, "dir.src"), 0o750); err != nil {
 		t.Fatalf("mkdir dirSrc: %v", err)
 	}
-
-	unreadableSrc := filepath.Join(root, "unreadable.src")
+	unreadableSrc := filepath.Join(srcRootDir, "unreadable.src")
 	if err := os.WriteFile(unreadableSrc, []byte("secret"), 0o000); err != nil {
 		t.Fatalf("write unreadable.src: %v", err)
 	}
 	t.Cleanup(func() {
 		if cErr := os.Chmod(unreadableSrc, 0o600); cErr != nil {
-			t.Fatalf("chmod unreadableSrc: %v", cErr)
+			t.Errorf("chmod unreadableSrc: %v", cErr)
+		}
+	})
+
+	srcRoot, openErr := os.OpenRoot(srcRootDir)
+	if openErr != nil {
+		t.Fatalf("open srcRoot: %v", openErr)
+	}
+	t.Cleanup(func() {
+		if cErr := srcRoot.Close(); cErr != nil {
+			t.Errorf("close srcRoot: %v", cErr)
 		}
 	})
 
@@ -407,7 +514,6 @@ func TestCopyRegularFile(t *testing.T) {
 	if err := os.WriteFile(blockerFile, []byte("blocker"), 0o600); err != nil {
 		t.Fatalf("write dst_blocker: %v", err)
 	}
-
 	existingDstDir := filepath.Join(root, "existing_dst_dir")
 	if err := os.MkdirAll(existingDstDir, 0o750); err != nil {
 		t.Fatalf("mkdir existingDstDir: %v", err)
@@ -415,49 +521,46 @@ func TestCopyRegularFile(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		src     string
+		relSrc  string
 		dst     string
 		wantErr bool
 	}{
 		{
 			name:    "missing_source_file_returns_error",
-			src:     filepath.Join(root, "missing.src"),
+			relSrc:  "missing.src",
 			dst:     filepath.Join(root, "dst_f1"),
 			wantErr: true,
 		},
 		{
 			name:    "symlink_source_rejected",
-			src:     symlinkSrc,
+			relSrc:  "symlink.src",
 			dst:     filepath.Join(root, "dst_f2"),
 			wantErr: true,
 		},
 		{
 			name:    "directory_source_rejected",
-			src:     dirSrc,
+			relSrc:  "dir.src",
 			dst:     filepath.Join(root, "dst_f3"),
 			wantErr: true,
 		},
 		{
 			name:    "mkdir_parent_dst_failure",
-			src:     validSrc,
 			dst:     filepath.Join(blockerFile, "child"),
 			wantErr: true,
 		},
 		{
 			name:    "unreadable_source_file_open_error",
-			src:     unreadableSrc,
+			relSrc:  "unreadable.src",
 			dst:     filepath.Join(root, "dst_f4"),
 			wantErr: true,
 		},
 		{
 			name:    "create_dst_error_when_dst_is_directory",
-			src:     validSrc,
 			dst:     existingDstDir,
 			wantErr: true,
 		},
 		{
 			name:    "successful_copy_regular_file",
-			src:     validSrc,
 			dst:     filepath.Join(root, "dst_f5", "copied.txt"),
 			wantErr: false,
 		},
@@ -466,24 +569,37 @@ func TestCopyRegularFile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := copyRegularFile(tt.src, tt.dst)
+			relSrc := tt.relSrc
+			if relSrc == "" {
+				relSrc = "valid.src"
+			}
+			err := copyRootRegularFile(srcRoot, relSrc, tt.dst)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("copyRegularFile error = %v, wantErr = %v", err, tt.wantErr)
+				t.Fatalf("copyRootRegularFile error = %v, wantErr = %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func TestCopyDirTreeMockedErrors(t *testing.T) {
+func TestCopyRootDirTreeMockedErrors(t *testing.T) {
 	root := t.TempDir()
 	validSrc := filepath.Join(root, "valid_tree")
 	if err := os.MkdirAll(validSrc, 0o750); err != nil {
 		t.Fatalf("mkdir valid_tree: %v", err)
 	}
-
-	origWalk := walkDir
+	srcRoot, openErr := os.OpenRoot(validSrc)
+	if openErr != nil {
+		t.Fatalf("open srcRoot: %v", openErr)
+	}
 	t.Cleanup(func() {
-		walkDir = origWalk
+		if cErr := srcRoot.Close(); cErr != nil {
+			t.Errorf("close srcRoot: %v", cErr)
+		}
+	})
+
+	origWalk := walkRootFS
+	t.Cleanup(func() {
+		walkRootFS = origWalk
 	})
 
 	tests := []struct {
@@ -493,18 +609,18 @@ func TestCopyDirTreeMockedErrors(t *testing.T) {
 	}{
 		{
 			setupMock: func() {
-				walkDir = func(_ string, fn fs.WalkDirFunc) error {
-					return fn("relative/path", fakeDirEntry{name: "relative"}, nil)
+				walkRootFS = func(_ fs.FS, _ string, fn fs.WalkDirFunc) error {
+					return fn("walk_err_entry", fakeDirEntry{name: "walk_err_entry"}, errors.New("simulated walk error"))
 				}
 			},
-			name:    "relative_path_error",
+			name:    "walk_callback_error",
 			wantErr: true,
 		},
 		{
 			setupMock: func() {
-				walkDir = func(_ string, fn fs.WalkDirFunc) error {
-					return fn(filepath.Join(validSrc, "sub"), fakeDirEntry{
-						name:    "sub",
+				walkRootFS = func(_ fs.FS, _ string, fn fs.WalkDirFunc) error {
+					return fn("dir_info_entry", fakeDirEntry{
+						name:    "dir_info_entry",
 						isDir:   true,
 						infoErr: errors.New("simulated dir info error"),
 					}, nil)
@@ -517,22 +633,34 @@ func TestCopyDirTreeMockedErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			walkDir = origWalk
+			walkRootFS = origWalk
 			tt.setupMock()
-			err := copyDirTree(validSrc, filepath.Join(root, "dst_tree"))
+			err := copyRootDirTree(srcRoot, filepath.Join(root, "dst_tree"))
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("copyDirTree error = %v, wantErr = %v", err, tt.wantErr)
+				t.Fatalf("copyRootDirTree error = %v, wantErr = %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func TestCopyRegularFileErrors(t *testing.T) {
+func TestCopyRootRegularFileIOCopyError(t *testing.T) {
 	root := t.TempDir()
-	validSrc := filepath.Join(root, "valid.src")
-	if err := os.WriteFile(validSrc, []byte("file content"), 0o600); err != nil {
-		t.Fatalf("write valid.src: %v", err)
+	srcDir := filepath.Join(root, "src")
+	if err := os.MkdirAll(srcDir, 0o750); err != nil {
+		t.Fatalf("mkdir src: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(srcDir, "payload.src"), []byte("file content"), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+	srcRoot, openErr := os.OpenRoot(srcDir)
+	if openErr != nil {
+		t.Fatalf("open srcRoot: %v", openErr)
+	}
+	t.Cleanup(func() {
+		if cErr := srcRoot.Close(); cErr != nil {
+			t.Errorf("close srcRoot: %v", cErr)
+		}
+	})
 
 	origIOCopy := ioCopy
 	t.Cleanup(func() {
@@ -543,8 +671,51 @@ func TestCopyRegularFileErrors(t *testing.T) {
 		return 0, errors.New("simulated io.Copy error")
 	}
 
-	err := copyRegularFile(validSrc, filepath.Join(root, "failed_copy.txt"))
+	err := copyRootRegularFile(srcRoot, "payload.src", filepath.Join(root, "failed_copy.txt"))
 	if err == nil {
 		t.Fatal("expected error on failed ioCopy")
+	}
+}
+
+func TestStageReverseProxyRootCloseErrors(t *testing.T) {
+	root := t.TempDir()
+	reverseProxyDir := filepath.Join(root, "reverse_proxy")
+	if err := os.MkdirAll(filepath.Join(reverseProxyDir, "close_domains"), 0o750); err != nil {
+		t.Fatalf("mkdir close_domains: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reverseProxyDir, "close_domains", "a.conf"), []byte("server {}"), 0o600); err != nil {
+		t.Fatalf("write a.conf: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(reverseProxyDir, "close_certs", "site-a"), 0o750); err != nil {
+		t.Fatalf("mkdir close_certs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reverseProxyDir, "close_certs", "site-a", "fullchain.pem"), []byte("PEM"), 0o600); err != nil {
+		t.Fatalf("write pem: %v", err)
+	}
+
+	reverseProxyRoot, openErr := os.OpenRoot(reverseProxyDir)
+	if openErr != nil {
+		t.Fatalf("open reverseProxyRoot: %v", openErr)
+	}
+	t.Cleanup(func() {
+		if cErr := reverseProxyRoot.Close(); cErr != nil {
+			t.Errorf("close reverseProxyRoot: %v", cErr)
+		}
+	})
+
+	origClose := closeReverseProxyRoot
+	t.Cleanup(func() { closeReverseProxyRoot = origClose })
+	closeReverseProxyRoot = func(r *os.Root) error {
+		if cErr := r.Close(); cErr != nil {
+			return cErr
+		}
+		return errors.New("simulated root close failure")
+	}
+
+	if err := stageReverseProxyConfFiles(reverseProxyRoot, "close_domains", []string{"a.conf"}, filepath.Join(root, "out_dom"), "domains_dir", "domain"); err == nil {
+		t.Fatal("expected close error from stageReverseProxyConfFiles")
+	}
+	if err := stageReverseProxyCerts(reverseProxyRoot, "close_certs", []string{"site-a"}, filepath.Join(root, "out_crt")); err == nil {
+		t.Fatal("expected close error from stageReverseProxyCerts")
 	}
 }

@@ -1,23 +1,21 @@
 // Package config loads, resolves, and validates global, profile, and per-stack orchestrator configurations.
 package config
 
-import "path/filepath"
-
 // Default configuration paths and fallback limits applied when optional fields are omitted.
 const (
-	DefaultConfigPath      = "/etc/bro/config.json"
-	DefaultBackupRoot      = "/backups"
-	DefaultLockFile        = "/run/lock/bro.lock"
-	DefaultZstdLevel       = 6
-	DefaultMinFreeGB       = 3
-	DefaultMaxArchiveGB    = 100
-	DefaultLocalRetention  = 3
-	DefaultRemoteRetain    = 7
-	DefaultWaitTimeoutSec  = 30
-	DefaultHomeBaseDir     = "/home"
-	DefaultComposeName     = "docker-compose.yaml"
-	DefaultAngieService    = "angie"
-	ReservedSelfBackupName = "bro-self"
+	DefaultConfigPath               = "/etc/bro/config.json"
+	DefaultBackupRoot               = "/backups"
+	DefaultLockFile                 = "/run/lock/bro.lock"
+	DefaultZstdLevel                = 6
+	DefaultMinFreeGB                = 3
+	DefaultMaxArchiveGB             = 100
+	DefaultLocalRetention           = 3
+	DefaultRemoteRetain             = 7
+	DefaultWaitTimeoutSec           = 30
+	DefaultHomeBaseDir              = "/home"
+	DefaultComposeName              = "docker-compose.yaml"
+	ReservedSelfBackupName          = "bro-self"
+	RestoreActionDeployReverseProxy = "deploy_reverse_proxy"
 
 	DefaultTimezone = TimezoneLocal
 	TimezoneLocal   = "local"
@@ -31,19 +29,19 @@ const (
 
 // GlobalConfig stores host-wide orchestrator paths, LVM defaults, retention rules, and offsite destinations.
 type GlobalConfig struct {
-	BackupRoot     string              `json:"backup_root"`
-	RestoreWorkDir string              `json:"restore_work_dir,omitempty"`
-	LockFile       string              `json:"lock_file"`
-	ProfilesDir    string              `json:"profiles_dir"`
-	ConfDir        string              `json:"conf_dir"`
-	Timezone       string              `json:"timezone"`
-	Angie          GlobalAngieConfig   `json:"angie"`
-	LVM            LVMConfig           `json:"lvm"`
-	Retention      RetentionConfig     `json:"retention"`
-	Destinations   []DestinationConfig `json:"destinations"`
-	MinFreeGB      uint64              `json:"min_free_gb"`
-	MaxArchiveGB   uint64              `json:"max_archive_gb"`
-	ZstdLevel      int                 `json:"zstd_level"`
+	BackupRoot        string              `json:"backup_root"`
+	RestoreWorkDir    string              `json:"restore_work_dir,omitempty"`
+	LockFile          string              `json:"lock_file"`
+	ProfilesDir       string              `json:"profiles_dir"`
+	ConfDir           string              `json:"conf_dir"`
+	Timezone          string              `json:"timezone"`
+	ReverseProxyStack string              `json:"reverse_proxy_stack,omitempty"`
+	LVM               LVMConfig           `json:"lvm"`
+	Retention         RetentionConfig     `json:"retention"`
+	Destinations      []DestinationConfig `json:"destinations"`
+	MinFreeGB         uint64              `json:"min_free_gb"`
+	MaxArchiveGB      uint64              `json:"max_archive_gb"`
+	ZstdLevel         int                 `json:"zstd_level"`
 }
 
 // LVMConfig identifies the volume group, origin logical volume, and temporary snapshot mount target.
@@ -64,24 +62,13 @@ type LVMOverride struct {
 	MountPoint   string `json:"mount_point"`
 }
 
-// GlobalAngieConfig defines host locations of the Angie reverse-proxy compose stack and certificate directories.
-type GlobalAngieConfig struct {
-	ComposeFile string `json:"compose_file"`
+// ReverseProxyProviderConfig defines the compose service and stack-relative directories of a reverse-proxy stack.
+type ReverseProxyProviderConfig struct {
+	Type        string `json:"type"`
 	ServiceName string `json:"service_name"`
 	CertsDir    string `json:"certs_dir"`
 	DomainsDir  string `json:"domains_dir"`
-	StreamDir   string `json:"stream_dir"`
-}
-
-// ResolveStreamDir returns the configured stream directory or derives it alongside DomainsDir.
-func (a *GlobalAngieConfig) ResolveStreamDir() string {
-	if a.StreamDir != "" {
-		return a.StreamDir
-	}
-	if a.DomainsDir != "" {
-		return filepath.Join(filepath.Dir(a.DomainsDir), "stream")
-	}
-	return ""
+	StreamDir   string `json:"stream_dir,omitempty"`
 }
 
 // RetentionConfig specifies local retention count and default/per-destination offsite retention counts.
@@ -181,11 +168,16 @@ type DatabaseConfig struct {
 	DBName  string           `json:"db_name"`
 }
 
-// StackAngieConfig lists zero, one, or multiple Angie domain configs and certificate directories owned by a stack.
-type StackAngieConfig struct {
-	ACMENames   []string `json:"acme_names"`
-	DomainConfs []string `json:"domain_confs"`
-	StreamConfs []string `json:"stream_confs"`
+// StackReverseProxyConfig lists reverse-proxy domain configs, stream configs, and certificate directories owned by a stack.
+type StackReverseProxyConfig struct {
+	ACMENames   []string `json:"acme_names,omitempty"`
+	DomainConfs []string `json:"domain_confs,omitempty"`
+	StreamConfs []string `json:"stream_confs,omitempty"`
+}
+
+// HasAssets reports whether any domain configs, stream configs, or ACME directories are configured.
+func (r *StackReverseProxyConfig) HasAssets() bool {
+	return r != nil && (len(r.DomainConfs) > 0 || len(r.StreamConfs) > 0 || len(r.ACMENames) > 0)
 }
 
 // RestoreStep describes a single deterministic action executed during single-stack disaster recovery.
@@ -203,48 +195,51 @@ type RestoreStep struct {
 
 // StackLayer represents the raw JSON schema shared between reusable profiles and per-stack config files.
 type StackLayer struct {
-	Enabled      *bool              `json:"enabled"`
-	User         *UserConfig        `json:"user"`
-	ZstdLevel    *int               `json:"zstd_level"`
-	MinFreeGB    *uint64            `json:"min_free_gb"`
-	Retention    *RetentionOverride `json:"retention"`
-	LVM          *LVMOverride       `json:"lvm"`
-	Files        *FilesConfig       `json:"files"`
-	Hooks        *HooksConfig       `json:"hooks"`
-	Angie        *StackAngieConfig  `json:"angie"`
-	Vars         map[string]string  `json:"vars,omitempty"`
-	Name         string             `json:"name"`
-	Extends      string             `json:"extends"`
-	StackDir     string             `json:"stack_dir"`
-	ComposeFile  string             `json:"compose_file"`
-	Destinations []string           `json:"destinations"`
-	DAC          []DACRule          `json:"dac"`
-	HostFiles    []HostFileConfig   `json:"host_files"`
-	Databases    []DatabaseConfig   `json:"databases"`
-	RestoreSteps []RestoreStep      `json:"restore_steps"`
+	Enabled              *bool                       `json:"enabled"`
+	User                 *UserConfig                 `json:"user"`
+	ZstdLevel            *int                        `json:"zstd_level"`
+	MinFreeGB            *uint64                     `json:"min_free_gb"`
+	Retention            *RetentionOverride          `json:"retention"`
+	LVM                  *LVMOverride                `json:"lvm"`
+	Files                *FilesConfig                `json:"files"`
+	Hooks                *HooksConfig                `json:"hooks"`
+	ReverseProxyProvider *ReverseProxyProviderConfig `json:"reverse_proxy_provider"`
+	ReverseProxy         *StackReverseProxyConfig    `json:"reverse_proxy"`
+	Vars                 map[string]string           `json:"vars,omitempty"`
+	Name                 string                      `json:"name"`
+	Extends              string                      `json:"extends"`
+	StackDir             string                      `json:"stack_dir"`
+	ComposeFile          string                      `json:"compose_file"`
+	Destinations         []string                    `json:"destinations"`
+	DAC                  []DACRule                   `json:"dac"`
+	HostFiles            []HostFileConfig            `json:"host_files"`
+	Databases            []DatabaseConfig            `json:"databases"`
+	RestoreSteps         []RestoreStep               `json:"restore_steps"`
 }
 
 // StackConfig is the fully resolved, validated effective configuration for a single stack.
 type StackConfig struct {
-	Vars         map[string]string `json:"vars,omitempty"`
-	Name         string            `json:"name"`
-	Extends      string            `json:"extends"`
-	StackDir     string            `json:"stack_dir"`
-	ComposeFile  string            `json:"compose_file"`
-	LVM          LVMConfig         `json:"lvm"`
-	User         UserConfig        `json:"user"`
-	Angie        StackAngieConfig  `json:"angie"`
-	Hooks        HooksConfig       `json:"hooks"`
-	Destinations []string          `json:"destinations"`
-	DAC          []DACRule         `json:"dac"`
-	HostFiles    []HostFileConfig  `json:"host_files"`
-	Databases    []DatabaseConfig  `json:"databases"`
-	RestoreSteps []RestoreStep     `json:"restore_steps"`
-	Retention    RetentionConfig   `json:"retention"`
-	Files        FilesConfig       `json:"files"`
-	MinFreeGB    uint64            `json:"min_free_gb"`
-	ZstdLevel    int               `json:"zstd_level"`
-	Enabled      bool              `json:"enabled"`
+	Vars                 map[string]string           `json:"vars,omitempty"`
+	ReverseProxyProvider *ReverseProxyProviderConfig `json:"reverse_proxy_provider,omitempty"`
+	Name                 string                      `json:"name"`
+	Extends              string                      `json:"extends"`
+	StackDir             string                      `json:"stack_dir"`
+	ComposeFile          string                      `json:"compose_file"`
+	LVM                  LVMConfig                   `json:"lvm"`
+	User                 UserConfig                  `json:"user"`
+	ReverseProxy         StackReverseProxyConfig     `json:"reverse_proxy"`
+	Hooks                HooksConfig                 `json:"hooks"`
+	Destinations         []string                    `json:"destinations"`
+	DAC                  []DACRule                   `json:"dac"`
+	HostFiles            []HostFileConfig            `json:"host_files"`
+	Databases            []DatabaseConfig            `json:"databases"`
+	RestoreSteps         []RestoreStep               `json:"restore_steps"`
+	Retention            RetentionConfig             `json:"retention"`
+	Files                FilesConfig                 `json:"files"`
+	MinFreeGB            uint64                      `json:"min_free_gb"`
+	ZstdLevel            int                         `json:"zstd_level"`
+	Enabled              bool                        `json:"enabled"`
+	hasReverseProxyBlock bool
 }
 
 // Bundle holds the resolved global configuration and all enabled or configured stack definitions.
@@ -264,13 +259,12 @@ func (b *Bundle) StackByName(name string) (StackConfig, bool) {
 	return StackConfig{}, false
 }
 
-// AngieStack returns the resolved stack configuration matching Global.Angie.ServiceName, or nil when absent.
-func (b *Bundle) AngieStack() *StackConfig {
-	name := b.Global.Angie.ServiceName
-	if name == "" {
-		name = DefaultAngieService
+// ReverseProxyStack returns the resolved stack configuration named by Global.ReverseProxyStack, or nil when disabled or absent.
+func (b *Bundle) ReverseProxyStack() *StackConfig {
+	if b.Global.ReverseProxyStack == "" {
+		return nil
 	}
-	if st, ok := b.StackByName(name); ok {
+	if st, ok := b.StackByName(b.Global.ReverseProxyStack); ok {
 		return &st
 	}
 	return nil

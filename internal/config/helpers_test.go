@@ -70,8 +70,8 @@ func assertBetaStack(t *testing.T, stack *StackConfig) {
 	if stack.Enabled {
 		t.Fatalf("expected app-beta stack disabled")
 	}
-	if len(stack.Angie.ACMENames) != 2 || len(stack.Angie.DomainConfs) != 2 || len(stack.Angie.StreamConfs) != 1 {
-		t.Fatalf("expected multi-domain and stream angie assets, got %+v", stack.Angie)
+	if len(stack.ReverseProxy.ACMENames) != 2 || len(stack.ReverseProxy.DomainConfs) != 2 || len(stack.ReverseProxy.StreamConfs) != 1 {
+		t.Fatalf("expected multi-domain and stream reverse_proxy assets, got %+v", stack.ReverseProxy)
 	}
 	if len(stack.Hooks.PreSnapshot) != 3 || len(stack.Hooks.PostSnapshot) != 1 {
 		t.Fatalf("unexpected app-beta hooks: %+v", stack.Hooks)

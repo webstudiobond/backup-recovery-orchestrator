@@ -72,26 +72,28 @@ func TestBackupPipelineDryRunAndEndToEnd(t *testing.T) {
 
 	var restoreDryBuf bytes.Buffer
 	if err := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
-		ArchivePath:   remoteArchive,
-		AngieMode:     RestoreModeAll,
-		HostFilesMode: RestoreModeAll,
-		DryRun:        true,
-		Out:           &restoreDryBuf,
+		ArchivePath:       remoteArchive,
+		ReverseProxyStack: bundle.ReverseProxyStack(),
+		ReverseProxyMode:  RestoreModeAll,
+		HostFilesMode:     RestoreModeAll,
+		DryRun:            true,
+		Out:               &restoreDryBuf,
 	}); err != nil {
 		t.Fatalf("Restore dry-run failed: %v", err)
 	}
 	if !strings.Contains(restoreDryBuf.String(), "alpha.example.com.conf") {
-		t.Fatalf("expected angie domain in restore dry-run output, got %q", restoreDryBuf.String())
+		t.Fatalf("expected reverse_proxy domain in restore dry-run output, got %q", restoreDryBuf.String())
 	}
 	if !strings.Contains(restoreDryBuf.String(), "turn.example.com.inc") {
-		t.Fatalf("expected angie stream in restore dry-run output, got %q", restoreDryBuf.String())
+		t.Fatalf("expected reverse_proxy stream in restore dry-run output, got %q", restoreDryBuf.String())
 	}
 
 	var restoreBuf bytes.Buffer
 	if err := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
-		ArchivePath: remoteArchive,
-		AngieMode:   RestoreModeAll,
-		Out:         &restoreBuf,
+		ArchivePath:       remoteArchive,
+		ReverseProxyStack: bundle.ReverseProxyStack(),
+		ReverseProxyMode:  RestoreModeAll,
+		Out:               &restoreBuf,
 	}); err != nil {
 		t.Fatalf("Restore failed: %v", err)
 	}
@@ -292,17 +294,19 @@ func TestBackupSingleStackErrors(t *testing.T) {
 	}
 	orch := newTestOrchestrator(runner, pPath, gPath, nil)
 
+	reverseProxyStack := bundle.ReverseProxyStack()
+
 	orch.LVM.AvailBytesFn = func(_ string) (uint64, error) {
 		return 0, errors.New("disk check fail")
 	}
-	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, &bundle.Stacks[0], true); err == nil || !strings.Contains(err.Error(), "check free space") {
+	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, reverseProxyStack, &bundle.Stacks[0], true); err == nil || !strings.Contains(err.Error(), "check free space") {
 		t.Fatalf("expected check free space error, got %v", err)
 	}
 	orch.LVM.AvailBytesFn = func(_ string) (uint64, error) { return 100 << 30, nil }
 
 	origNow := orch.Now
 	orch.Now = nil
-	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, &bundle.Stacks[0], true); err != nil {
+	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, reverseProxyStack, &bundle.Stacks[0], true); err != nil {
 		t.Fatalf("backupSingleStack with nil Now failed: %v", err)
 	}
 	orch.Now = origNow
@@ -313,14 +317,14 @@ func TestBackupSingleStackErrors(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 	bundle.Global.BackupRoot = fileAsDir
-	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, &bundle.Stacks[0], true); err == nil || !strings.Contains(err.Error(), "create local backup directory") {
+	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, reverseProxyStack, &bundle.Stacks[0], true); err == nil || !strings.Contains(err.Error(), "create local backup directory") {
 		t.Fatalf("expected create local backup directory error, got %v", err)
 	}
 	bundle.Global.BackupRoot = origBackupRoot
 
 	bundle.Stacks[0].Hooks.PreDump = []config.HookStep{{Command: []string{"fail-stage"}}}
 	runner.failMatch = "fail-stage"
-	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, &bundle.Stacks[0], true); err == nil || !strings.Contains(err.Error(), "run pre_dump hooks") {
+	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, reverseProxyStack, &bundle.Stacks[0], true); err == nil || !strings.Contains(err.Error(), "run pre_dump hooks") {
 		t.Fatalf("expected stage error, got %v", err)
 	}
 	runner.failMatch = ""
@@ -335,7 +339,7 @@ func TestBackupSingleStackErrors(t *testing.T) {
 	if err := os.MkdirAll(conflictTar, 0o700); err != nil {
 		t.Fatalf("mkdir conflict dir: %v", err)
 	}
-	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, &bundle.Stacks[0], true); err == nil {
+	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, reverseProxyStack, &bundle.Stacks[0], true); err == nil {
 		t.Fatal("expected AssembleContainer error")
 	}
 	if err := os.RemoveAll(conflictTar); err != nil {
@@ -345,7 +349,7 @@ func TestBackupSingleStackErrors(t *testing.T) {
 	bundle.Global.Timezone = origTZ
 
 	bundle.Stacks[0].Retention.LocalCount = 0
-	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, &bundle.Stacks[0], true); err == nil || !strings.Contains(err.Error(), "prune local backups") {
+	if err := orch.backupSingleStack(ctx, io.Discard, &bundle.Global, reverseProxyStack, &bundle.Stacks[0], true); err == nil || !strings.Contains(err.Error(), "prune local backups") {
 		t.Fatalf("expected prune local backups error, got %v", err)
 	}
 }
@@ -364,7 +368,7 @@ func TestBackupSingleStackMkdirTempError(t *testing.T) {
 	runner := &fakeOrchRunner{snapMount: bundle.Global.LVM.MountPoint, stackName: stackName}
 	orch := newTestOrchestrator(runner, pPath, gPath, nil)
 
-	err := orch.backupSingleStack(context.Background(), io.Discard, &bundle.Global, &bundle.Stacks[0], true)
+	err := orch.backupSingleStack(context.Background(), io.Discard, &bundle.Global, bundle.ReverseProxyStack(), &bundle.Stacks[0], true)
 	if err == nil || !strings.Contains(err.Error(), "create staging directory") {
 		t.Fatalf("expected create staging directory error, got %v", err)
 	}
@@ -391,6 +395,7 @@ func TestStageStackBackupStepsAndErrors(t *testing.T) {
 	now := time.Now()
 	stamp := "2026-11-16_15-00-00"
 
+	reverseProxyStack := bundle.ReverseProxyStack()
 	cases := []struct {
 		setup   func()
 		wantErr string
@@ -406,21 +411,21 @@ func TestStageStackBackupStepsAndErrors(t *testing.T) {
 		}},
 		{wantErr: "create snapshot", setup: func() { stack.Hooks.PreSnapshot = nil; runner.failMatch = "--snapshot" }},
 		{wantErr: "archive host_files", setup: func() { runner.failMatch = "tar -cpf -" }},
-		{wantErr: "stage angie assets", setup: func() {
+		{wantErr: "stage reverse-proxy assets", setup: func() {
 			runner.failMatch = ""
-			bundle.Global.Angie.DomainsDir = filepath.Join(root, "missing", "domains")
+			reverseProxyStack.ReverseProxyProvider.DomainsDir = "missing/domains"
 		}},
 	}
 	for _, tc := range cases {
 		tc.setup()
-		if _, err := orch.stageStackBackup(ctx, &bundle.Global, stack, stagingDir, now, stamp); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+		if _, err := orch.stageStackBackup(ctx, reverseProxyStack, stack, stagingDir, now, stamp); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 			t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 		}
 	}
 
-	bundle.Global.Angie.DomainsDir = filepath.Join(root, "home", "angie", "data", "conf.d", "domains")
+	reverseProxyStack.ReverseProxyProvider.DomainsDir = "data/conf.d/domains"
 	stack.HostFiles = []config.HostFileConfig{{Path: filepath.Join(root, "missing_host_file"), Owner: "app:app", FileMode: "0600", Optional: true}}
-	manifest, err := orch.stageStackBackup(ctx, &bundle.Global, stack, stagingDir, now, stamp)
+	manifest, err := orch.stageStackBackup(ctx, reverseProxyStack, stack, stagingDir, now, stamp)
 	if err != nil {
 		t.Fatalf("stageStackBackup with missing host file failed: %v", err)
 	}

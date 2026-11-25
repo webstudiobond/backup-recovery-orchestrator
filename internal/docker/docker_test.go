@@ -61,9 +61,11 @@ func TestClientComposeCommands(t *testing.T) {
 			wantSubArgs: []string{"run", "--rm", "-T", "--no-deps", "-e", "NODE_ENV=production", "node", "npm", "start"},
 		},
 		{
-			name:        "check angie config",
-			invoke:      func(c *Client) error { return c.CheckAngieConfig(ctx, composePath, "") },
-			wantSubArgs: []string{"exec", "-T", "angie", "angie", "-t"},
+			name: "check reverse proxy config",
+			invoke: func(c *Client) error {
+				return c.CheckReverseProxyConfig(ctx, composePath, "edge-angie", []string{"angie", "-t"})
+			},
+			wantSubArgs: []string{"exec", "-T", "edge-angie", "angie", "-t"},
 		},
 	}
 
@@ -103,6 +105,9 @@ func TestClientValidationErrors(t *testing.T) {
 		{name: "empty exec args", fn: func() error { return client.Exec(ctx, "/home/a/docker-compose.yaml", "app", nil, nil, nil, nil) }},
 		{name: "empty run service", fn: func() error {
 			return client.Run(ctx, "/home/a/docker-compose.yaml", "", nil, []string{"echo"}, nil, nil)
+		}},
+		{name: "empty proxy check args", fn: func() error {
+			return client.CheckReverseProxyConfig(ctx, "/home/a/docker-compose.yaml", "angie", nil)
 		}},
 	}
 

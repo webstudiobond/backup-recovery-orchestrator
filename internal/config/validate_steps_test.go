@@ -382,8 +382,8 @@ func TestValidateRestoreStep(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "standard no-op restore action deploy_angie",
-			step:    RestoreStep{Action: "deploy_angie"},
+			name:    "standard no-op restore action deploy_reverse_proxy",
+			step:    RestoreStep{Action: "deploy_reverse_proxy"},
 			dbIDs:   knownDBs,
 			wantErr: false,
 		},

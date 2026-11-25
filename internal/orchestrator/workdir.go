@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	workDirName           = ".bro-work"
-	stageDirPrefix        = "bro-stage-"
-	restoreDirPrefix      = "bro-restore-"
-	angieRollbackPrefix   = "bro-angie-rollback-"
-	maxWorkSubdirAttempts = 16
-	workSubdirRandBytes   = 8
-	restoreWorkBufferByte = uint64(1 << 30)
+	workDirName                = ".bro-work"
+	stageDirPrefix             = "bro-stage-"
+	restoreDirPrefix           = "bro-restore-"
+	reverseProxyRollbackPrefix = "bro-reverse-proxy-rollback-"
+	maxWorkSubdirAttempts      = 16
+	workSubdirRandBytes        = 8
+	restoreWorkBufferByte      = uint64(1 << 30)
 )
 
 var (
@@ -195,7 +195,7 @@ func randomWorkToken() (string, error) {
 func isManagedWorkEntry(name string) bool {
 	return strings.HasPrefix(name, stageDirPrefix) ||
 		strings.HasPrefix(name, restoreDirPrefix) ||
-		strings.HasPrefix(name, angieRollbackPrefix)
+		strings.HasPrefix(name, reverseProxyRollbackPrefix)
 }
 
 func (o *Orchestrator) checkRestoreFreeSpace(

@@ -13,13 +13,7 @@
     "snapshot_size": "10G",
     "mount_point": "/mnt/home_snap"
   },
-  "angie": {
-    "compose_file": "/home/angie/docker-compose.yaml",
-    "service_name": "angie",
-    "certs_dir": "/home/angie/data/certs",
-    "domains_dir": "/home/angie/data/conf.d/domains",
-    "stream_dir": "/home/angie/data/conf.d/stream"
-  },
+  "reverse_proxy_stack": "angie",
   "retention": {
     "local_count": 3,
     "remote_count": 7

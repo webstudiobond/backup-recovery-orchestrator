@@ -14,19 +14,19 @@ import (
 )
 
 type globalConfigJSON struct {
-	ZstdLevel      *int                `json:"zstd_level"`
-	MinFreeGB      *uint64             `json:"min_free_gb"`
-	MaxArchiveGB   *uint64             `json:"max_archive_gb"`
-	Retention      *RetentionOverride  `json:"retention"`
-	BackupRoot     string              `json:"backup_root"`
-	RestoreWorkDir string              `json:"restore_work_dir"`
-	LockFile       string              `json:"lock_file"`
-	ProfilesDir    string              `json:"profiles_dir"`
-	ConfDir        string              `json:"conf_dir"`
-	Timezone       string              `json:"timezone"`
-	Angie          GlobalAngieConfig   `json:"angie"`
-	LVM            LVMConfig           `json:"lvm"`
-	Destinations   []DestinationConfig `json:"destinations"`
+	ZstdLevel         *int                `json:"zstd_level"`
+	MinFreeGB         *uint64             `json:"min_free_gb"`
+	MaxArchiveGB      *uint64             `json:"max_archive_gb"`
+	Retention         *RetentionOverride  `json:"retention"`
+	BackupRoot        string              `json:"backup_root"`
+	RestoreWorkDir    string              `json:"restore_work_dir"`
+	LockFile          string              `json:"lock_file"`
+	ProfilesDir       string              `json:"profiles_dir"`
+	ConfDir           string              `json:"conf_dir"`
+	Timezone          string              `json:"timezone"`
+	ReverseProxyStack string              `json:"reverse_proxy_stack"`
+	LVM               LVMConfig           `json:"lvm"`
+	Destinations      []DestinationConfig `json:"destinations"`
 }
 
 // LoadGlobal reads and validates only the global orchestrator configuration without loading profiles or stacks.
@@ -143,37 +143,20 @@ func loadGlobalConfig(path string) (GlobalConfig, error) {
 	}
 
 	return GlobalConfig{
-		BackupRoot:     filepath.Clean(backupRoot),
-		RestoreWorkDir: restoreWorkDir,
-		LockFile:       filepath.Clean(lockFile),
-		ProfilesDir:    profilesDir,
-		ConfDir:        confDir,
-		Timezone:       tz,
-		Angie:          cleanGlobalAngie(&raw.Angie),
-		LVM:            raw.LVM,
-		Retention:      retention,
-		Destinations:   cleanGlobalDestinations(raw.Destinations),
-		MinFreeGB:      minFreeGB,
-		MaxArchiveGB:   maxArchiveGB,
-		ZstdLevel:      zstdLevel,
+		BackupRoot:        filepath.Clean(backupRoot),
+		RestoreWorkDir:    restoreWorkDir,
+		LockFile:          filepath.Clean(lockFile),
+		ProfilesDir:       profilesDir,
+		ConfDir:           confDir,
+		Timezone:          tz,
+		ReverseProxyStack: strings.TrimSpace(raw.ReverseProxyStack),
+		LVM:               raw.LVM,
+		Retention:         retention,
+		Destinations:      cleanGlobalDestinations(raw.Destinations),
+		MinFreeGB:         minFreeGB,
+		MaxArchiveGB:      maxArchiveGB,
+		ZstdLevel:         zstdLevel,
 	}, nil
-}
-
-func cleanGlobalAngie(angie *GlobalAngieConfig) GlobalAngieConfig {
-	out := *angie
-	if out.ServiceName == "" {
-		out.ServiceName = DefaultAngieService
-	}
-	if out.DomainsDir != "" {
-		out.DomainsDir = filepath.Clean(out.DomainsDir)
-	}
-	if out.StreamDir != "" {
-		out.StreamDir = filepath.Clean(out.StreamDir)
-	}
-	if out.CertsDir != "" {
-		out.CertsDir = filepath.Clean(out.CertsDir)
-	}
-	return out
 }
 
 func cleanGlobalDestinations(raw []DestinationConfig) []DestinationConfig {
@@ -276,6 +259,10 @@ func loadStacks(global *GlobalConfig, profiles map[string]StackLayer) ([]StackCo
 	slices.SortFunc(stacks, func(a, b StackConfig) int {
 		return strings.Compare(a.Name, b.Name)
 	})
+
+	if err := validateBundleReverseProxy(global, stacks); err != nil {
+		return nil, err
+	}
 
 	return stacks, nil
 }

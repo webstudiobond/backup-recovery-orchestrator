@@ -15,35 +15,35 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 )
 
-// Restore mode constants control auxiliary asset deployment strategies for Angie and host-level files during recovery.
+// Restore mode constants control auxiliary asset deployment strategies for reverse-proxy and host-level files during recovery.
 const (
 	RestoreModeNone = "none"
 	RestoreModeAll  = "all"
 )
 
-// RestoreOptions configures single-stack point-in-time disaster recovery and explicit Angie/host asset selection.
+// RestoreOptions configures single-stack point-in-time disaster recovery and explicit reverse-proxy/host asset selection.
 type RestoreOptions struct {
-	Out           io.Writer
-	AngieStack    *config.StackConfig
-	ArchivePath   string
-	AngieMode     string
-	HostFilesMode string
-	AngieDomains  []string
-	AngieStreams  []string
-	AngieCerts    []string
-	SkipSteps     []string
-	OnlySteps     []string
-	DryRun        bool
+	Out                 io.Writer
+	ReverseProxyStack   *config.StackConfig
+	ArchivePath         string
+	ReverseProxyMode    string
+	HostFilesMode       string
+	ReverseProxyDomains []string
+	ReverseProxyStreams []string
+	ReverseProxyCerts   []string
+	SkipSteps           []string
+	OnlySteps           []string
+	DryRun              bool
 }
 
 type restoreExecutionContext struct {
-	manifest   *archive.Manifest
-	global     *config.GlobalConfig
-	angieStack *config.StackConfig
-	out        io.Writer
-	unpackDir  string
-	angieSel   angieSelection
-	hostFiles  []string
+	manifest          *archive.Manifest
+	global            *config.GlobalConfig
+	reverseProxyStack *config.StackConfig
+	out               io.Writer
+	unpackDir         string
+	reverseProxySel   reverseProxySelection
+	hostFiles         []string
 }
 
 // Restore verifies a single TAR backup container, checks UID/GID safety, and executes declarative restore_steps.
@@ -68,7 +68,7 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 		return errors.New("self-backup archives are reference-only and cannot be restored via 'bro restore'")
 	}
 
-	angieSel, selErr := resolveAngieSelection(&manifest.Angie, opts.AngieMode, opts.AngieDomains, opts.AngieStreams, opts.AngieCerts)
+	reverseProxySel, selErr := resolveReverseProxySelection(&manifest.ReverseProxy, opts.ReverseProxyMode, opts.ReverseProxyDomains, opts.ReverseProxyStreams, opts.ReverseProxyCerts)
 	if selErr != nil {
 		return selErr
 	}
@@ -82,6 +82,9 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 	if len(steps) == 0 {
 		return errors.New("no restore steps selected after filtering")
 	}
+	if prereqErr := validateReverseProxyRestorePrereqs(steps, reverseProxySel, opts.ReverseProxyStack); prereqErr != nil {
+		return prereqErr
+	}
 
 	userStatus, userErr := o.SysUser.EnsureUser(ctx, manifest.User, manifest.StackDir, opts.DryRun)
 	if userErr != nil {
@@ -89,7 +92,7 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 	}
 
 	if opts.DryRun {
-		printRestoreDryRun(out, &manifest, string(userStatus), angieSel, selectedHostFiles, steps)
+		printRestoreDryRun(out, &manifest, string(userStatus), reverseProxySel, selectedHostFiles, steps)
 		return nil
 	}
 
@@ -104,13 +107,13 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 	}
 
 	rctx := &restoreExecutionContext{
-		manifest:   &manifest,
-		global:     global,
-		angieStack: opts.AngieStack,
-		out:        out,
-		unpackDir:  unpackDir,
-		angieSel:   angieSel,
-		hostFiles:  selectedHostFiles,
+		manifest:          &manifest,
+		global:            global,
+		reverseProxyStack: opts.ReverseProxyStack,
+		out:               out,
+		unpackDir:         unpackDir,
+		reverseProxySel:   reverseProxySel,
+		hostFiles:         selectedHostFiles,
 	}
 	execErr := o.runRestoreSequence(ctx, opts.ArchivePath, rctx, steps)
 	rmErr := os.RemoveAll(unpackDir)
@@ -192,8 +195,8 @@ func (o *Orchestrator) executeDataOrInfraStep(ctx context.Context, rctx *restore
 		return true, o.restoreHostFiles(ctx, rctx)
 	case "move_contents":
 		return true, moveStackContents(ctx, rctx.manifest.StackDir, step.From, step.To)
-	case "deploy_angie":
-		return true, deployAngieWithRollback(ctx, o.Docker, o.DAC, &rctx.global.Angie, rctx.angieStack, resolveRestoreWorkDir(rctx.global), rctx.unpackDir, rctx.angieSel)
+	case config.RestoreActionDeployReverseProxy:
+		return true, deployReverseProxyWithRollback(ctx, o.Docker, o.DAC, rctx.reverseProxyStack, resolveRestoreWorkDir(rctx.global), rctx.unpackDir, rctx.reverseProxySel)
 	case "db_import":
 		return true, o.restoreDatabaseStep(ctx, rctx, step.DatabaseID)
 	default:
@@ -260,7 +263,7 @@ func effectiveRestoreSteps(manifest *archive.Manifest) []config.RestoreStep {
 		{Action: "extract_files"},
 		{Action: "apply_dac"},
 		{Action: "extract_host_files"},
-		{Action: "deploy_angie"},
+		{Action: config.RestoreActionDeployReverseProxy},
 		{Action: "compose_up"},
 		{Action: "wait_healthy"},
 	}
@@ -285,14 +288,14 @@ func printRestoreDryRun(
 	out io.Writer,
 	manifest *archive.Manifest,
 	userStatus string,
-	angieSel angieSelection,
+	reverseProxySel reverseProxySelection,
 	hostFiles []string,
 	steps []config.RestoreStep,
 ) {
 	writeLine(out, fmt.Sprintf("Dry-run restore plan for stack %q (created_at=%s):", manifest.StackName, manifest.CreatedAt))
 	writeLine(out, fmt.Sprintf("  user: %s (uid=%d, gid=%d, status=%s)", manifest.User.Name, manifest.User.UID, manifest.User.GID, userStatus))
 	writeLine(out, "  stack_dir: "+manifest.StackDir)
-	writeLine(out, fmt.Sprintf("  angie_domains: %v | angie_streams: %v | angie_certs: %v", angieSel.Domains, angieSel.Streams, angieSel.Certs))
+	writeLine(out, fmt.Sprintf("  reverse_proxy_domains: %v | reverse_proxy_streams: %v | reverse_proxy_certs: %v", reverseProxySel.Domains, reverseProxySel.Streams, reverseProxySel.Certs))
 	writeLine(out, fmt.Sprintf("  host_files: %v", hostFiles))
 	writeLine(out, fmt.Sprintf("  dac_rules: %d", len(manifest.DAC)))
 	writeLine(out, "  steps:")
@@ -300,6 +303,26 @@ func printRestoreDryRun(
 		step := &steps[idx]
 		writeLine(out, fmt.Sprintf("    %d. %s (service=%s services=%v db=%s)", idx+1, step.Action, step.Service, step.Services, step.DatabaseID))
 	}
+}
+
+func validateReverseProxyRestorePrereqs(
+	steps []config.RestoreStep,
+	reverseProxySel reverseProxySelection,
+	reverseProxyStack *config.StackConfig,
+) error {
+	if reverseProxySel.isEmpty() {
+		return nil
+	}
+	for i := range steps {
+		if steps[i].Action != config.RestoreActionDeployReverseProxy {
+			continue
+		}
+		if reverseProxyStack == nil || reverseProxyStack.ReverseProxyProvider == nil {
+			return errors.New("global reverse_proxy_stack provider is required to deploy reverse-proxy assets")
+		}
+		return nil
+	}
+	return nil
 }
 
 func effectiveInnerExtractLimit(declaredBytes int64, global *config.GlobalConfig) int64 {

@@ -20,7 +20,7 @@
     { "path": "/etc/default/angie-cert-sync", "owner": "root:root", "file_mode": "0600", "optional": true },
     { "path": "/etc/sysctl.d/99-net-buffers.conf", "owner": "root:root", "file_mode": "0644", "optional": true }
   ],
-  "angie": {
+  "reverse_proxy": {
     "domain_confs": ["adguardhome.conf"]
   },
   "restore_steps": [
@@ -28,7 +28,7 @@
     { "action": "extract_files" },
     { "action": "apply_dac" },
     { "action": "extract_host_files" },
-    { "action": "deploy_angie" },
+    { "action": "deploy_reverse_proxy" },
     { "action": "compose_up" },
     { "action": "wait_healthy" }
   ]

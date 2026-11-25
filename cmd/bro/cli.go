@@ -135,7 +135,7 @@ Subcommands:
   backup      [--config FILE] [--all | STACK...] [--no-sync] [--dry-run]
   selfbackup  [--config FILE] [--no-sync] [--dry-run]
   sync        [--config FILE] [--all | STACK...] [--destination NAME]
-  restore     [--config FILE] [--dry-run] [--angie=none|all] [--angie-domains=...] [--angie-streams=...] [--angie-certs=...] [--host-files=none|all] [--skip-steps=...] [--only-steps=...] [-f FILE | <archive.tar>]
+  restore     [--config FILE] [--dry-run] [--reverse-proxy=none|all] [--reverse-proxy-domains=...] [--reverse-proxy-streams=...] [--reverse-proxy-certs=...] [--host-files=none|all] [--skip-steps=...] [--only-steps=...] [-f FILE | <archive.tar>]
   dac         [--config FILE] [--dry-run] <stack>
   verify      [--config FILE] [-f FILE | <archive.tar>]
   config      validate [--config FILE]

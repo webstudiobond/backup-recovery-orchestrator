@@ -90,12 +90,12 @@ func (c *Client) Run(ctx context.Context, composeFile, service string, envVars, 
 	return c.runCompose(ctx, composeFile, args, stdin, stdout)
 }
 
-// CheckAngieConfig validates Angie configuration syntax without reloading or interrupting active proxy traffic.
-func (c *Client) CheckAngieConfig(ctx context.Context, composeFile, serviceName string) error {
-	if strings.TrimSpace(serviceName) == "" {
-		serviceName = "angie"
+// CheckReverseProxyConfig validates reverse-proxy configuration syntax inside the proxy service container.
+func (c *Client) CheckReverseProxyConfig(ctx context.Context, composeFile, serviceName string, cmdArgs []string) error {
+	if strings.TrimSpace(serviceName) == "" || len(cmdArgs) == 0 {
+		return errors.New("reverse-proxy service_name and check command must not be empty")
 	}
-	return c.Exec(ctx, composeFile, serviceName, nil, []string{"angie", "-t"}, nil, nil)
+	return c.Exec(ctx, composeFile, serviceName, nil, cmdArgs, nil, nil)
 }
 
 func composeArgs(composeFile string, subArgs []string) ([]string, error) {

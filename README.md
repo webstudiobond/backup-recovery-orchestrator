@@ -17,14 +17,14 @@ bro was built to automate backups, disaster recovery, and DAC policy enforcement
 - System Utilities: GNU `tar`, `zstd`, `mount`, `umount`, `mountpoint` (util-linux), `useradd`, `groupadd` (shadow/passwd).
 - Optional:
   - `rclone`: required only when using `rclone` destination types or remote trash cleanup.
-  - Angie: reverse proxy container with compose manifest, required only when managing Angie virtual hosts, streams, or ACME TLS certificates.
+  - Reverse Proxy (Angie): reverse-proxy container stack (`reverse_proxy_stack` in `config.json` with `reverse_proxy_provider` in `conf.d/<stack>.json`), required only when managing virtual hosts, streams, or ACME TLS certificates.
 
 ## Capabilities
 
 Backup & Archival
 - Point-in-time filesystem capture via temporary LVM snapshots without container downtime.
 - Online database streaming with live zstd compression, sourcing credentials from Docker secrets or host files.
-- Synchronized capture of Angie virtual hosts, stream configs, and ACME TLS certificates.
+- Synchronized capture of reverse-proxy virtual hosts, stream configs, and ACME TLS certificates.
 - Declarative pre-dump, pre-snapshot, and post-snapshot lifecycle hooks.
 - Self-backup of orchestrator configurations, stack profiles, and systemd units.
 
@@ -32,7 +32,7 @@ Disaster Recovery
 - Archive verification against embedded SHA-256 checksum manifests prior to extraction.
 - Host account validation and conflict-free provisioning with exact numeric UIDs and GIDs.
 - Clean-slate file restoration with path traversal protection.
-- Angie configuration restoration with syntax validation and automatic rollback on failure.
+- Reverse-proxy configuration restoration (`deploy_reverse_proxy`, `--reverse-proxy*`) with syntax validation and automatic rollback on failure.
 - Step-level filtering to execute or skip specific restore actions.
 
 Storage & DAC
@@ -98,7 +98,7 @@ Reference templates in `/usr/share/doc/bro/examples/` (or repository `examples/`
 
 #### Global Configuration
 
-`/etc/bro/config.json` is the primary orchestrator configuration file. It defines host-wide operational parameters, including the backup storage root, LVM volume and snapshot settings, Angie reverse proxy paths, retention policies, and replication destinations.
+`/etc/bro/config.json` is the primary orchestrator configuration file. It defines host-wide operational parameters, including the backup storage root, LVM volume and snapshot settings, the active `reverse_proxy_stack` reference, retention policies, and replication destinations.
 
 Copy the template from examples and customize it for your host:
 

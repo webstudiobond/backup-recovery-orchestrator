@@ -236,7 +236,7 @@ func TestSelfBackupCommand(t *testing.T) {
 	if err := os.WriteFile(fileAsRoot, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write fileAsRoot: %v", err)
 	}
-	badJSON := `{"backup_root":"` + fileAsRoot + `","lock_file":"` + filepath.Join(root, "bad.lock") + `","lvm":{"vg_name":"ubuntu-vg","lv_name":"lv_home","snapshot_name":"home_snap","snapshot_size":"35G","mount_point":"` + filepath.Join(root, "mnt", "snap") + `"}}`
+	badJSON := `{"backup_root":"` + fileAsRoot + `","reverse_proxy_stack":"angie","lock_file":"` + filepath.Join(root, "bad.lock") + `","lvm":{"vg_name":"ubuntu-vg","lv_name":"lv_home","snapshot_name":"home_snap","snapshot_size":"35G","mount_point":"` + filepath.Join(root, "mnt", "snap") + `"}}`
 	if err := os.WriteFile(badCfgPath, []byte(badJSON), 0o600); err != nil {
 		t.Fatalf("write bad config: %v", err)
 	}
@@ -367,14 +367,14 @@ func TestRestoreCommand(t *testing.T) {
 			wantOut: "Dry-run restore plan",
 		},
 		{
-			name:    "restore bogus angie mode non-dry-run",
-			args:    []string{"-f", tarPath, "--angie=bogus"},
+			name:    "restore bogus reverse-proxy mode non-dry-run",
+			args:    []string{"-f", tarPath, "--reverse-proxy=bogus"},
 			withCfg: true,
-			wantErr: "unsupported angie restore mode",
+			wantErr: "unsupported reverse-proxy restore mode",
 		},
 		{
-			name:    "restore rejects unknown angie stream",
-			args:    []string{"-f", tarPath, "--angie-streams=missing.inc"},
+			name:    "restore rejects unknown reverse-proxy stream",
+			args:    []string{"-f", tarPath, "--reverse-proxy-streams=missing.inc"},
 			withCfg: true,
 			dryRun:  true,
 			wantErr: "is not present in archive manifest",
@@ -490,7 +490,7 @@ func TestVerifyCommand(t *testing.T) {
 		{
 			name:    "verify valid archive flag",
 			args:    []string{"-f", tarPath},
-			wantOut: "angie_streams=[]",
+			wantOut: "reverse_proxy_streams=[]",
 		},
 		{
 			name:    "verify self backup container",

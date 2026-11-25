@@ -54,9 +54,10 @@ func (o *Orchestrator) Backup(ctx context.Context, bundle *config.Bundle, opts *
 		return fmt.Errorf("prepare backup work directory: %w", err)
 	}
 
+	reverseProxyStack := bundle.ReverseProxyStack()
 	var stackErrs []error
 	for i := range targets {
-		if stackErr := o.backupSingleStack(ctx, out, &bundle.Global, &targets[i], opts.NoSync); stackErr != nil {
+		if stackErr := o.backupSingleStack(ctx, out, &bundle.Global, reverseProxyStack, &targets[i], opts.NoSync); stackErr != nil {
 			wrapped := fmt.Errorf("backup stack %q: %w", targets[i].Name, stackErr)
 			writeLine(out, fmt.Sprintf("[backup-error] stack=%s err=%v", targets[i].Name, stackErr))
 			stackErrs = append(stackErrs, wrapped)
@@ -77,7 +78,7 @@ func (o *Orchestrator) Backup(ctx context.Context, bundle *config.Bundle, opts *
 	return errors.Join(stackErrs...)
 }
 
-func (o *Orchestrator) backupSingleStack(ctx context.Context, out io.Writer, global *config.GlobalConfig, stack *config.StackConfig, noSync bool) error {
+func (o *Orchestrator) backupSingleStack(ctx context.Context, out io.Writer, global *config.GlobalConfig, reverseProxyStack, stack *config.StackConfig, noSync bool) error {
 	if err := o.LVM.CheckFreeSpace(ctx, global.BackupRoot, stack.MinFreeGB); err != nil {
 		return fmt.Errorf("check free space: %w", err)
 	}
@@ -100,7 +101,7 @@ func (o *Orchestrator) backupSingleStack(ctx context.Context, out io.Writer, glo
 		return fmt.Errorf("create staging directory: %w", mkErr)
 	}
 
-	manifest, stageErr := o.stageStackBackup(ctx, global, stack, stagingDir, backupNow, stamp)
+	manifest, stageErr := o.stageStackBackup(ctx, reverseProxyStack, stack, stagingDir, backupNow, stamp)
 	if stageErr != nil {
 		rmErr := os.RemoveAll(stagingDir)
 		return errors.Join(stageErr, wrapRemoveErr(rmErr, stagingDir))
@@ -131,7 +132,7 @@ func (o *Orchestrator) backupSingleStack(ctx context.Context, out io.Writer, glo
 
 func (o *Orchestrator) stageStackBackup(
 	ctx context.Context,
-	global *config.GlobalConfig,
+	reverseProxyStack *config.StackConfig,
 	stack *config.StackConfig,
 	stagingDir string,
 	backupNow time.Time,
@@ -167,8 +168,8 @@ func (o *Orchestrator) stageStackBackup(
 		hostRel = ""
 	}
 
-	if angieErr := archive.StageAngieAssets(ctx, &global.Angie, &stack.Angie, stagingDir); angieErr != nil {
-		return archive.Manifest{}, fmt.Errorf("stage angie assets: %w", angieErr)
+	if reverseProxyErr := archive.StageReverseProxyAssets(ctx, reverseProxyStack, &stack.ReverseProxy, stagingDir); reverseProxyErr != nil {
+		return archive.Manifest{}, fmt.Errorf("stage reverse-proxy assets: %w", reverseProxyErr)
 	}
 
 	return archive.Manifest{
@@ -183,7 +184,7 @@ func (o *Orchestrator) stageStackBackup(
 		HostFilesUncompressedBytes: hostUncompressed,
 		User:                       stack.User,
 		Databases:                  manifestDBs,
-		Angie:                      stack.Angie,
+		ReverseProxy:               stack.ReverseProxy,
 		HostFiles:                  hostRecords,
 		DAC:                        stack.DAC,
 		RestoreSteps:               stack.RestoreSteps,
@@ -254,8 +255,8 @@ func printBackupDryRun(out io.Writer, bundle *config.Bundle, targets []config.St
 	for i := range targets {
 		s := &targets[i]
 		destSummary := formatStackDestinations(bundle.Global.Destinations, s)
-		writeLine(out, fmt.Sprintf("  - stack=%s dir=%s dbs=%d host_files=%d angie_domains=%d angie_streams=%d angie_certs=%d zstd=%d local_keep=%d destinations=[%s]",
-			s.Name, s.StackDir, len(s.Databases), len(s.HostFiles), len(s.Angie.DomainConfs), len(s.Angie.StreamConfs), len(s.Angie.ACMENames),
+		writeLine(out, fmt.Sprintf("  - stack=%s dir=%s dbs=%d host_files=%d reverse_proxy_domains=%d reverse_proxy_streams=%d reverse_proxy_certs=%d zstd=%d local_keep=%d destinations=[%s]",
+			s.Name, s.StackDir, len(s.Databases), len(s.HostFiles), len(s.ReverseProxy.DomainConfs), len(s.ReverseProxy.StreamConfs), len(s.ReverseProxy.ACMENames),
 			s.ZstdLevel, s.Retention.LocalCount, destSummary))
 	}
 }

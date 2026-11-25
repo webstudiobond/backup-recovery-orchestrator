@@ -113,7 +113,7 @@ func validateRestoreSteps(steps []RestoreStep, dbs []DatabaseConfig) error {
 
 func validateRestoreStep(idx int, step *RestoreStep, dbIDs map[string]struct{}) error {
 	switch step.Action {
-	case "compose_down", "extract_files", "apply_dac", "extract_host_files", "deploy_angie", "compose_up", "wait_healthy", "compose_restart":
+	case "compose_down", "extract_files", "apply_dac", "extract_host_files", RestoreActionDeployReverseProxy, "compose_up", "wait_healthy", "compose_restart":
 		return nil
 	case "move_contents":
 		return validateMoveContentsStep(idx, step)

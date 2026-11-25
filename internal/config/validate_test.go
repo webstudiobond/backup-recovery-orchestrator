@@ -111,14 +111,14 @@ func TestLoadBundleErrors(t *testing.T) {
 			errContains: "unknown database_id",
 		},
 		{
-			name:       "path traversal in angie domain conf",
+			name:       "path traversal in reverse_proxy domain conf",
 			globalJSON: baseGlobal,
 			singleStack: `{
-  "angie": {
+  "reverse_proxy": {
     "domain_confs": ["../escape.example.com.conf"]
   }
 }`,
-			errContains: "must not start with '.' or contain '..'",
+			errContains: "must not start with '.' or '-' or contain '..'",
 		},
 		{
 			name:       "dac path escaping stack dir",
@@ -228,19 +228,19 @@ func TestLoadBundleErrors(t *testing.T) {
 			errContains: "must differ",
 		},
 		{
-			name:        "angie relative stream_dir",
-			globalJSON:  `{"backup_root":"/backups","angie":{"stream_dir":"relative/stream"},"lvm":{"vg_name":"vg","lv_name":"lv","snapshot_name":"snap","snapshot_size":"35G","mount_point":"/mnt/snap"}}`,
-			errContains: "angie.stream_dir",
+			name:        "invalid reverse_proxy_stack identifier",
+			globalJSON:  `{"backup_root":"/backups","reverse_proxy_stack":"../bad","lvm":{"vg_name":"vg","lv_name":"lv","snapshot_name":"snap","snapshot_size":"35G","mount_point":"/mnt/snap"}}`,
+			errContains: "reverse_proxy_stack",
 		},
 		{
-			name:       "angie escaping stream_confs",
+			name:       "reverse_proxy escaping stream_confs",
 			globalJSON: baseGlobal,
 			singleStack: `{
-  "angie": {
+  "reverse_proxy": {
     "stream_confs": ["../escape.inc"]
   }
 }`,
-			errContains: "angie.stream_confs entry",
+			errContains: "reverse_proxy.stream_confs entry",
 		},
 		{
 			name:        "reserved selfbackup stack name",
@@ -535,99 +535,38 @@ func TestValidateRetention(t *testing.T) {
 	}
 }
 
-func TestValidateGlobalAngie(t *testing.T) {
+func TestValidateStackReverseProxy(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		modify  func(*GlobalAngieConfig)
-		name    string
-		wantErr bool
-	}{
-		{
-			name: "relative compose_file path",
-			modify: func(c *GlobalAngieConfig) {
-				c.ComposeFile = "rel/docker-compose.yml"
-			},
-			wantErr: true,
-		},
-		{
-			name: "relative certs_dir path",
-			modify: func(c *GlobalAngieConfig) {
-				c.CertsDir = "rel/certs"
-			},
-			wantErr: true,
-		},
-		{
-			name: "relative domains_dir path",
-			modify: func(c *GlobalAngieConfig) {
-				c.DomainsDir = "rel/domains"
-			},
-			wantErr: true,
-		},
-		{
-			name: "relative stream_dir path",
-			modify: func(c *GlobalAngieConfig) {
-				c.StreamDir = "rel/stream"
-			},
-			wantErr: true,
-		},
-		{
-			name: "all absolute valid paths",
-			modify: func(c *GlobalAngieConfig) {
-				c.ComposeFile = "/etc/angie/compose.yml"
-				c.CertsDir = "/etc/angie/certificates"
-				c.DomainsDir = "/etc/angie/http_domains"
-				c.StreamDir = "/etc/angie/stream_domains"
-			},
-			wantErr: false,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			var cfg GlobalAngieConfig
-			tc.modify(&cfg)
-			err := validateGlobalAngie(&cfg)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateGlobalAngie() error = %v, wantErr = %v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateStackAngie(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name    string
-		angie   StackAngieConfig
-		wantErr bool
+		name         string
+		reverseProxy StackReverseProxyConfig
+		wantErr      bool
 	}{
 		{
 			name: "invalid acme names identifier",
-			angie: StackAngieConfig{
+			reverseProxy: StackReverseProxyConfig{
 				ACMENames: []string{".illegal_acme"},
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid domain confs identifier",
-			angie: StackAngieConfig{
+			reverseProxy: StackReverseProxyConfig{
 				DomainConfs: []string{"nested/domain.conf"},
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid stream confs identifier",
-			angie: StackAngieConfig{
+			reverseProxy: StackReverseProxyConfig{
 				StreamConfs: []string{"bad stream conf"},
 			},
 			wantErr: true,
 		},
 		{
-			name: "valid stack angie entries",
-			angie: StackAngieConfig{
+			name: "valid stack reverse_proxy entries",
+			reverseProxy: StackReverseProxyConfig{
 				ACMENames:   []string{"app.example.com"},
 				DomainConfs: []string{"app.example.com.conf"},
 				StreamConfs: []string{"stream.example.org.conf"},
@@ -639,9 +578,9 @@ func TestValidateStackAngie(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateStackAngie(&tc.angie)
+			err := validateStackReverseProxy(&tc.reverseProxy)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateStackAngie() error = %v, wantErr = %v", err, tc.wantErr)
+				t.Fatalf("validateStackReverseProxy() error = %v, wantErr = %v", err, tc.wantErr)
 			}
 		})
 	}

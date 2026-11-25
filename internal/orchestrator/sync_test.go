@@ -149,7 +149,7 @@ func TestSyncDestinationStacksBranching(t *testing.T) {
 
 	badCleanupDest := *dest
 	badCleanupDest.RcloneCleanupRemote = "invalid:remote"
-	errsCleanup := orch.syncDestinationStacks(context.Background(), io.Discard, bundle.Global.BackupRoot, &badCleanupDest, bundle.Stacks, true, false)
+	errsCleanup := orch.syncDestinationStacks(context.Background(), io.Discard, bundle.Global.BackupRoot, &badCleanupDest, bundle.Stacks[:1], true, false)
 	if len(errsCleanup) == 0 || !strings.Contains(errsCleanup[0].Error(), "cleanup destination") {
 		t.Fatalf("expected cleanup destination error, got %v", errsCleanup)
 	}

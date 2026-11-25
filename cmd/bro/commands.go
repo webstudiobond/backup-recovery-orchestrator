@@ -145,10 +145,10 @@ func runRestoreCmd(ctx context.Context, args []string, out, errOut io.Writer, ru
 	cfgPath := fs.String("config", config.DefaultConfigPath, "path to global config.json")
 	archiveFlag := fs.String("f", "", "path to backup archive (.tar)")
 	dryRun := fs.Bool("dry-run", false, "validate archive and print restore plan without modifying host")
-	angieMode := fs.String("angie", orchestrator.RestoreModeNone, "angie restore policy: none or all")
-	angieDomains := fs.String("angie-domains", "", "comma-separated angie domain config filenames to restore")
-	angieStreams := fs.String("angie-streams", "", "comma-separated angie stream config filenames to restore")
-	angieCerts := fs.String("angie-certs", "", "comma-separated angie certificate directory names to restore")
+	reverseProxyMode := fs.String("reverse-proxy", orchestrator.RestoreModeNone, "reverse-proxy restore policy: none or all")
+	reverseProxyDomains := fs.String("reverse-proxy-domains", "", "comma-separated reverse-proxy domain config filenames to restore")
+	reverseProxyStreams := fs.String("reverse-proxy-streams", "", "comma-separated reverse-proxy stream config filenames to restore")
+	reverseProxyCerts := fs.String("reverse-proxy-certs", "", "comma-separated reverse-proxy certificate directory names to restore")
 	hostFilesMode := fs.String("host-files", orchestrator.RestoreModeNone, "host_files restore policy: none or all")
 	skipSteps := fs.String("skip-steps", "", "comma-separated restore step actions to skip")
 	onlySteps := fs.String("only-steps", "", "comma-separated restore step actions to run exclusively")
@@ -171,17 +171,17 @@ func runRestoreCmd(ctx context.Context, args []string, out, errOut io.Writer, ru
 	orch := newOrchestrator(runner)
 	execFn := func() error {
 		if resErr := orch.Restore(ctx, &bundle.Global, &orchestrator.RestoreOptions{
-			Out:           out,
-			AngieStack:    bundle.AngieStack(),
-			ArchivePath:   archivePath,
-			AngieMode:     *angieMode,
-			AngieDomains:  splitCSV(*angieDomains),
-			AngieStreams:  splitCSV(*angieStreams),
-			AngieCerts:    splitCSV(*angieCerts),
-			HostFilesMode: *hostFilesMode,
-			SkipSteps:     splitCSV(*skipSteps),
-			OnlySteps:     splitCSV(*onlySteps),
-			DryRun:        *dryRun,
+			Out:                 out,
+			ReverseProxyStack:   bundle.ReverseProxyStack(),
+			ArchivePath:         archivePath,
+			ReverseProxyMode:    *reverseProxyMode,
+			ReverseProxyDomains: splitCSV(*reverseProxyDomains),
+			ReverseProxyStreams: splitCSV(*reverseProxyStreams),
+			ReverseProxyCerts:   splitCSV(*reverseProxyCerts),
+			HostFilesMode:       *hostFilesMode,
+			SkipSteps:           splitCSV(*skipSteps),
+			OnlySteps:           splitCSV(*onlySteps),
+			DryRun:              *dryRun,
 		}); resErr != nil {
 			return fmt.Errorf("execute restore: %w", resErr)
 		}
@@ -260,9 +260,9 @@ func runVerifyCmd(ctx context.Context, args []string, out, errOut io.Writer) err
 	if kind == "" {
 		kind = "stack"
 	}
-	writeFormatted(out, "verified archive %s: kind=%s stack=%s created_at=%s artifacts=%d angie_domains=%v angie_streams=%v angie_certs=%v host_files=%d\n",
+	writeFormatted(out, "verified archive %s: kind=%s stack=%s created_at=%s artifacts=%d reverse_proxy_domains=%v reverse_proxy_streams=%v reverse_proxy_certs=%v host_files=%d\n",
 		archivePath, kind, manifest.StackName, manifest.CreatedAt, len(manifest.Artifacts),
-		manifest.Angie.DomainConfs, manifest.Angie.StreamConfs, manifest.Angie.ACMENames, len(manifest.HostFiles))
+		manifest.ReverseProxy.DomainConfs, manifest.ReverseProxy.StreamConfs, manifest.ReverseProxy.ACMENames, len(manifest.HostFiles))
 	return nil
 }
 

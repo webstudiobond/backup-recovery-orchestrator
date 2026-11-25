@@ -24,6 +24,7 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/hooks"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/lvm"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/mount"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/reverseproxy"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/storage"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/sysuser"
 )
@@ -169,24 +170,25 @@ func buildTestBundle(t *testing.T, root, stackName string) config.Bundle {
 
 	stackDir := filepath.Join(root, "home", stackName)
 	composeFile := filepath.Join(stackDir, "docker-compose.yaml")
-	angieCompose := filepath.Join(root, "home", "angie", "docker-compose.yaml")
-	domainsDir := filepath.Join(root, "home", "angie", "data", "conf.d", "domains")
-	streamDir := filepath.Join(root, "home", "angie", "data", "conf.d", "stream")
-	certsDir := filepath.Join(root, "home", "angie", "data", "certs", stackName)
+	reverseProxyDir := filepath.Join(root, "home", "edge-proxy")
+	reverseProxyCompose := filepath.Join(reverseProxyDir, "docker-compose.yaml")
+	domainsDir := filepath.Join(reverseProxyDir, "data", "conf.d", "domains")
+	streamDir := filepath.Join(reverseProxyDir, "data", "conf.d", "stream")
+	certsDir := filepath.Join(reverseProxyDir, "data", "tls-certs", stackName)
 	hostLogrotate := filepath.Join(root, "etc", "logrotate.d", stackName)
 	cfgDir := filepath.Join(root, "etc", "bro")
 	systemdDir := filepath.Join(root, "etc", "systemd", "system")
 	fuseMount := filepath.Join(root, "mnt", "cloud-primary")
 	fuseBackups := filepath.Join(fuseMount, "backups")
 
-	for _, d := range []string{stackDir, filepath.Dir(angieCompose), domainsDir, streamDir, certsDir, filepath.Dir(hostLogrotate), cfgDir, systemdDir, fuseBackups} {
+	for _, d := range []string{stackDir, filepath.Dir(reverseProxyCompose), domainsDir, streamDir, certsDir, filepath.Dir(hostLogrotate), cfgDir, systemdDir, fuseBackups} {
 		if err := os.MkdirAll(d, 0o750); err != nil {
 			t.Fatalf("mkdir %q: %v", d, err)
 		}
 	}
 	for _, f := range []string{
 		composeFile,
-		angieCompose,
+		reverseProxyCompose,
 		filepath.Join(certsDir, "certificate.pem"),
 		hostLogrotate,
 		filepath.Join(cfgDir, "config.json"),
@@ -225,14 +227,8 @@ func buildTestBundle(t *testing.T, root, stackName string) config.Bundle {
 				SnapshotSize: "35G",
 				MountPoint:   filepath.Join(root, "mnt", "home_snap"),
 			},
-			Angie: config.GlobalAngieConfig{
-				ComposeFile: angieCompose,
-				ServiceName: "angie",
-				CertsDir:    filepath.Dir(certsDir),
-				DomainsDir:  domainsDir,
-				StreamDir:   streamDir,
-			},
-			Retention: config.RetentionConfig{LocalCount: 1, RemoteCount: 5},
+			ReverseProxyStack: "edge-proxy",
+			Retention:         config.RetentionConfig{LocalCount: 1, RemoteCount: 5},
 			Destinations: []config.DestinationConfig{
 				{
 					Name:                "cloud-primary",
@@ -270,7 +266,7 @@ func buildTestBundle(t *testing.T, root, stackName string) config.Bundle {
 				Databases: []config.DatabaseConfig{
 					{ID: "primary", Driver: "postgres", Service: "pg", DBUser: stackName, DBName: stackName},
 				},
-				Angie: config.StackAngieConfig{
+				ReverseProxy: config.StackReverseProxyConfig{
 					ACMENames:   []string{stackName},
 					DomainConfs: []string{"alpha.example.com.conf"},
 					StreamConfs: []string{"turn.example.com.inc"},
@@ -280,10 +276,24 @@ func buildTestBundle(t *testing.T, root, stackName string) config.Bundle {
 					{Action: "extract_files"},
 					{Action: "apply_dac"},
 					{Action: "extract_host_files"},
-					{Action: "deploy_angie"},
+					{Action: "deploy_reverse_proxy"},
 					{Action: "compose_up", Services: []string{"pg"}},
 					{Action: "wait_healthy", Services: []string{"pg"}},
 					{Action: "db_import"},
+				},
+			},
+			{
+				Name:        "edge-proxy",
+				Enabled:     false,
+				StackDir:    reverseProxyDir,
+				ComposeFile: reverseProxyCompose,
+				User:        config.UserConfig{Name: "proxyuser", UID: 1001, GID: 1001},
+				ReverseProxyProvider: &config.ReverseProxyProviderConfig{
+					Type:        reverseproxy.TypeAngie,
+					ServiceName: "proxyedge",
+					CertsDir:    "data/tls-certs",
+					DomainsDir:  "data/conf.d/domains",
+					StreamDir:   "data/conf.d/stream",
 				},
 			},
 		},
@@ -421,5 +431,15 @@ func (f fakeDirEntry) Name() string               { return f.name }
 func (f fakeDirEntry) IsDir() bool                { return f.isDir }
 func (f fakeDirEntry) Type() fs.FileMode          { return 0 }
 func (f fakeDirEntry) Info() (fs.FileInfo, error) { return nil, f.infoErr }
+
+func mustLookupReverseProxyProvider(t *testing.T) reverseproxy.Provider {
+	t.Helper()
+
+	p, err := reverseproxy.Lookup(reverseproxy.TypeAngie)
+	if err != nil {
+		t.Fatalf("lookup reverse-proxy provider %q: %v", reverseproxy.TypeAngie, err)
+	}
+	return p
+}
 
 var _ = fs.ModePerm
