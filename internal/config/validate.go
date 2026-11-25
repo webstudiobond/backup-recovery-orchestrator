@@ -11,8 +11,14 @@ func validateGlobalConfig(cfg *GlobalConfig) error {
 	if !filepath.IsAbs(cfg.BackupRoot) {
 		return fmt.Errorf("backup_root %q must be an absolute path", cfg.BackupRoot)
 	}
+	if cfg.RestoreWorkDir != "" && (!filepath.IsAbs(cfg.RestoreWorkDir) || filepath.Clean(cfg.RestoreWorkDir) == string(filepath.Separator)) {
+		return fmt.Errorf("restore_work_dir %q must be an absolute non-root path", cfg.RestoreWorkDir)
+	}
 	if !filepath.IsAbs(cfg.LockFile) {
 		return fmt.Errorf("lock_file %q must be an absolute path", cfg.LockFile)
+	}
+	if cfg.MaxArchiveGB == 0 {
+		return errors.New("max_archive_gb must be greater than zero")
 	}
 	if err := validateZstdLevel(cfg.ZstdLevel); err != nil {
 		return err

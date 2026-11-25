@@ -197,15 +197,13 @@ func TestBuildSelfBackupContainerErrors(t *testing.T) {
 		t.Fatalf("expected create local directory error, got %v", err)
 	}
 
-	badTmp := filepath.Join(root, "bad_tmp")
-	if err := os.WriteFile(badTmp, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write bad_tmp: %v", err)
-	}
-	t.Setenv("TMPDIR", badTmp)
+	origRootMkdir := rootMkdir
+	rootMkdir = mockFailingRootMkdir
 	if _, _, err := orch.buildSelfBackupContainer(context.Background(), &global, nil, now, stamp); err == nil || !strings.Contains(err.Error(), "create selfbackup staging directory") {
+		rootMkdir = origRootMkdir
 		t.Fatalf("expected create staging directory error, got %v", err)
 	}
-	t.Setenv("TMPDIR", "")
+	rootMkdir = origRootMkdir
 
 	badItems := []config.HostFileConfig{
 		{Path: filepath.Join(root, "nonexistent_file"), Optional: false},
@@ -228,8 +226,6 @@ func TestBuildSelfBackupContainerErrors(t *testing.T) {
 }
 
 func TestSelfBackupValidation(t *testing.T) {
-	t.Parallel()
-
 	ctx := context.Background()
 	root := t.TempDir()
 	pPath, gPath := writeFakeAccounts(t, root, "app-self-val")
@@ -269,8 +265,15 @@ func TestSelfBackupValidation(t *testing.T) {
 	}
 	badBundle := bundle
 	badBundle.Global.BackupRoot = fileAsRoot
-	if err := orch.SelfBackup(ctx, &badBundle, nil); err == nil || !strings.Contains(err.Error(), "create local selfbackup directory") {
-		t.Fatalf("expected build container error, got %v", err)
+	if err := orch.SelfBackup(ctx, &badBundle, nil); err == nil || !strings.Contains(err.Error(), "prepare selfbackup work directory") {
+		t.Fatalf("expected prepare selfbackup work directory error, got %v", err)
+	}
+
+	origRootMkdir := rootMkdir
+	rootMkdir = mockFailingRootMkdir
+	defer func() { rootMkdir = origRootMkdir }()
+	if err := orch.SelfBackup(ctx, &bundle, nil); err == nil || !strings.Contains(err.Error(), "create selfbackup staging directory") {
+		t.Fatalf("expected create selfbackup staging directory error, got %v", err)
 	}
 }
 

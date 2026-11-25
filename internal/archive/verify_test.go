@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,7 +157,7 @@ func TestReadAndVerifyTarStreamErrors(t *testing.T) {
 			remain: len(buf.Bytes()) / 2,
 		}
 
-		_, err := readAndVerifyTar(ctx, r)
+		_, err := readAndVerifyTar(ctx, r, normalizeContainerLimits(ContainerLimits{}))
 		if err == nil || !strings.Contains(err.Error(), "context canceled during container verification") {
 			t.Fatalf("expected context canceled error, got %v", err)
 		}
@@ -165,7 +166,7 @@ func TestReadAndVerifyTarStreamErrors(t *testing.T) {
 	t.Run("read container tar header error", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := readAndVerifyTar(context.Background(), &failingReader{err: errors.New("read header fail")})
+		_, err := readAndVerifyTar(context.Background(), &failingReader{err: errors.New("read header fail")}, normalizeContainerLimits(ContainerLimits{}))
 		if err == nil || !strings.Contains(err.Error(), "read container tar header") {
 			t.Fatalf("expected header error, got %v", err)
 		}
@@ -181,7 +182,7 @@ func TestReadAndVerifyTarStreamErrors(t *testing.T) {
 		}
 
 		r := io.MultiReader(bytes.NewReader(buf.Bytes()), &failingReader{err: errors.New("stream fault")})
-		_, err := readAndVerifyTar(context.Background(), r)
+		_, err := readAndVerifyTar(context.Background(), r, normalizeContainerLimits(ContainerLimits{}))
 		if err == nil || !strings.Contains(err.Error(), "hash container entry") {
 			t.Fatalf("expected hash error, got %v", err)
 		}
@@ -204,7 +205,7 @@ func TestReadAndVerifyTarEntries(t *testing.T) {
 			{header: &tar.Header{Name: "sub/item.txt", Mode: 0o600, Size: int64(len(data)), Typeflag: tar.TypeReg}, body: data},
 		})
 
-		manifest, err := readAndVerifyTar(context.Background(), bytes.NewReader(rawTar))
+		manifest, err := readAndVerifyTar(context.Background(), bytes.NewReader(rawTar), normalizeContainerLimits(ContainerLimits{}))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -220,7 +221,7 @@ func TestReadAndVerifyTarEntries(t *testing.T) {
 			{header: &tar.Header{Name: "symlink.txt", Mode: 0o600, Typeflag: tar.TypeSymlink, Linkname: "target"}},
 		})
 
-		_, err := readAndVerifyTar(context.Background(), bytes.NewReader(rawTar))
+		_, err := readAndVerifyTar(context.Background(), bytes.NewReader(rawTar), normalizeContainerLimits(ContainerLimits{}))
 		if err == nil || !strings.Contains(err.Error(), "unsupported non-regular tar entry") {
 			t.Fatalf("expected unsupported non-regular error, got %v", err)
 		}
@@ -235,7 +236,7 @@ func TestReadAndVerifyTarEntries(t *testing.T) {
 			{header: &tar.Header{Name: ManifestFilename, Mode: 0o600, Size: int64(len(manBody)), Typeflag: tar.TypeReg}, body: manBody},
 		})
 
-		_, err := readAndVerifyTar(context.Background(), bytes.NewReader(rawTar))
+		_, err := readAndVerifyTar(context.Background(), bytes.NewReader(rawTar), normalizeContainerLimits(ContainerLimits{}))
 		if err == nil || !strings.Contains(err.Error(), "duplicate manifest.json in container") {
 			t.Fatalf("expected duplicate manifest error, got %v", err)
 		}
@@ -249,7 +250,7 @@ func TestReadAndVerifyTarEntries(t *testing.T) {
 			{header: &tar.Header{Name: ManifestFilename, Mode: 0o600, Size: int64(len(badJSON)), Typeflag: tar.TypeReg}, body: badJSON},
 		})
 
-		_, err := readAndVerifyTar(context.Background(), bytes.NewReader(rawTar))
+		_, err := readAndVerifyTar(context.Background(), bytes.NewReader(rawTar), normalizeContainerLimits(ContainerLimits{}))
 		if err == nil || !strings.Contains(err.Error(), "parse manifest.json") {
 			t.Fatalf("expected parse manifest error, got %v", err)
 		}
@@ -322,7 +323,7 @@ func TestDecodeManifestEntry(t *testing.T) {
 				expectedErr = "exceeds bounds"
 			}
 
-			manifest, err := decodeManifestEntry(tc.r, tc.size)
+			manifest, _, err := decodeManifestEntry(tc.r, tc.size)
 			if tc.expectErr {
 				if err == nil || !strings.Contains(err.Error(), expectedErr) {
 					t.Fatalf("expected error containing %q, got %v", expectedErr, err)
@@ -367,7 +368,7 @@ func TestHashReader(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			digest, err := hashReader(tc.r)
+			digest, _, err := hashReader(tc.r, 1024)
 			if tc.expectErr {
 				if err == nil || !strings.Contains(err.Error(), tc.errContains) {
 					t.Fatalf("expected error containing %q, got %v", tc.errContains, err)
@@ -446,5 +447,64 @@ func TestCompareChecksums(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestVerifyContainerLimits(t *testing.T) {
+	t.Parallel()
+
+	defaultLim := ContainerLimitsFromGB(0)
+	if defaultLim.MaxEntries != maxContainerEntries || defaultLim.MaxBytes <= 0 {
+		t.Fatalf("unexpected default limits: %+v", defaultLim)
+	}
+	overflowLim := ContainerLimitsFromGB(^uint64(0))
+	if overflowLim.MaxBytes <= 0 {
+		t.Fatalf("expected saturated positive MaxBytes, got %+v", overflowLim)
+	}
+	if cappedReadLimit(overflowLim.MaxBytes) != overflowLim.MaxBytes {
+		t.Fatalf("expected cappedReadLimit to saturate at MaxInt64")
+	}
+	if err := validateContainerEntryHeader(&tar.Header{Name: "neg", Typeflag: tar.TypeReg, Size: -1}, 10, defaultLim); err == nil || !strings.Contains(err.Error(), "negative size") {
+		t.Fatalf("expected negative size header error, got %v", err)
+	}
+
+	data := []byte("payload-bytes")
+	digest := sha256.Sum256(data)
+	manBody := fmt.Sprintf(`{"schema_version":1,"artifacts":{"a.txt":%q}}`, hex.EncodeToString(digest[:]))
+	rawTar := makeCustomTarBytes(t, []customTarEntry{
+		{header: &tar.Header{Name: "dir/", Mode: 0o750, Typeflag: tar.TypeDir}},
+		{header: &tar.Header{Name: ManifestFilename, Mode: 0o600, Size: int64(len(manBody)), Typeflag: tar.TypeReg}, body: []byte(manBody)},
+		{header: &tar.Header{Name: "a.txt", Mode: 0o600, Size: int64(len(data)), Typeflag: tar.TypeReg}, body: data},
+	})
+
+	tarPath := filepath.Join(t.TempDir(), "bounded.tar")
+	if err := os.WriteFile(tarPath, rawTar, 0o600); err != nil {
+		t.Fatalf("write tar: %v", err)
+	}
+
+	if _, err := VerifyContainerWithLimits(context.Background(), tarPath, ContainerLimits{MaxEntries: 2, MaxBytes: 1 << 20}); err == nil || !strings.Contains(err.Error(), "entry count exceeds limit") {
+		t.Fatalf("expected entry count limit error, got %v", err)
+	}
+	if _, err := VerifyContainerWithLimits(context.Background(), tarPath, ContainerLimits{MaxEntries: 10, MaxBytes: int64(len(manBody)) + 4}); err == nil || !strings.Contains(err.Error(), "exceeds maximum allowed size") {
+		t.Fatalf("expected payload byte limit error, got %v", err)
+	}
+	if _, err := VerifyContainerWithLimits(context.Background(), tarPath, ContainerLimits{MaxEntries: 10, MaxBytes: 1 << 20}); err != nil {
+		t.Fatalf("expected verification within limits to succeed, got %v", err)
+	}
+}
+
+func mockOversizedHashReader(_ io.Reader, remaining int64) (digest string, written int64, err error) {
+	return "0000", remaining + 1, nil
+}
+
+func TestVerifyContainerStreamOverflowMock(t *testing.T) {
+	origHashReader := hashReaderFn
+	hashReaderFn = mockOversizedHashReader
+	t.Cleanup(func() {
+		hashReaderFn = origHashReader
+	})
+
+	if _, _, err := hashContainerEntry(strings.NewReader("x"), "overflow.txt", 10, ContainerLimits{MaxBytes: 10}); err == nil || !strings.Contains(err.Error(), "exceeds maximum allowed size") {
+		t.Fatalf("expected stream overflow error from hashContainerEntry, got %v", err)
 	}
 }

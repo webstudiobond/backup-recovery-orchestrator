@@ -351,11 +351,11 @@ func TestBackupSingleStackErrors(t *testing.T) {
 }
 
 func TestBackupSingleStackMkdirTempError(t *testing.T) {
-	fakeDir := filepath.Join(t.TempDir(), "not_a_dir")
-	if err := os.WriteFile(fakeDir, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
-	t.Setenv("TMPDIR", fakeDir)
+	origRootMkdir := rootMkdir
+	rootMkdir = mockFailingRootMkdir
+	t.Cleanup(func() {
+		rootMkdir = origRootMkdir
+	})
 
 	root := t.TempDir()
 	stackName := "app-stage-err"

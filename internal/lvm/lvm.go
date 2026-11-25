@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,10 +79,18 @@ func NewManager(runner cmdexec.Runner) *Manager {
 
 // CheckFreeSpace verifies that dir has at least minFreeGB GiB available before starting a backup.
 func (m *Manager) CheckFreeSpace(ctx context.Context, dir string, minFreeGB uint64) error {
+	if minFreeGB > math.MaxUint64/bytesPerGiB {
+		return fmt.Errorf("requested free space %d GiB exceeds representable byte limit", minFreeGB)
+	}
+	return m.CheckFreeSpaceBytes(ctx, dir, minFreeGB*bytesPerGiB)
+}
+
+// CheckFreeSpaceBytes verifies that dir has at least requiredBytes available on its backing filesystem.
+func (m *Manager) CheckFreeSpaceBytes(ctx context.Context, dir string, requiredBytes uint64) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context canceled before free-space check: %w", err)
 	}
-	if minFreeGB == 0 {
+	if requiredBytes == 0 {
 		return nil
 	}
 
@@ -95,10 +104,10 @@ func (m *Manager) CheckFreeSpace(ctx context.Context, dir string, minFreeGB uint
 		return err
 	}
 
-	requiredBytes := minFreeGB * bytesPerGiB
 	if availBytes < requiredBytes {
 		availGiB := float64(availBytes) / float64(bytesPerGiB)
-		return fmt.Errorf("insufficient free space at %q: %.2f GiB available, %d GiB required", dir, availGiB, minFreeGB)
+		reqGiB := float64(requiredBytes) / float64(bytesPerGiB)
+		return fmt.Errorf("insufficient free space at %q: %.2f GiB available, %.2f GiB required", dir, availGiB, reqGiB)
 	}
 	return nil
 }

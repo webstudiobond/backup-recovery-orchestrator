@@ -214,7 +214,7 @@ func TestExtractTarMembersBasic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			dst, rootObj := createTestDstRoot(t, filepath.Join(t.TempDir(), "dst"))
-			err := extractTarMembers(tt.ctx, tt.reader, dst, rootObj)
+			err := extractTarMembers(tt.ctx, tt.reader, dst, rootObj, normalizeContainerLimits(ContainerLimits{}))
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("extractTarMembers error = %v, wantErr = %v", err, tt.wantErr)
 			}
@@ -293,7 +293,7 @@ func TestExtractTarMembersValidation(t *testing.T) {
 				dst, rootObj = createTestDstRoot(t, filepath.Join(base, "dst"))
 			}
 
-			err := extractTarMembers(context.Background(), tt.reader, dst, rootObj)
+			err := extractTarMembers(context.Background(), tt.reader, dst, rootObj, normalizeContainerLimits(ContainerLimits{}))
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("extractTarMembers error = %v, wantErr = %v", err, tt.wantErr)
 			}
@@ -348,7 +348,7 @@ func TestWriteRootFile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := writeRootFile(r, tt.relPath, tt.src, 0o600)
+			_, err := writeRootFile(r, tt.relPath, tt.src, 0o600, 1024)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("writeRootFile error = %v, wantErr = %v", err, tt.wantErr)
 			}
@@ -699,5 +699,51 @@ func TestCleanArchiveMember(t *testing.T) {
 				t.Fatalf("cleanArchiveMember(%q) = (%q, %q), want (%q, %q)", tt.raw, rel, target, tt.wantRel, tt.wantTarget)
 			}
 		})
+	}
+}
+
+func TestUnpackContainerWithLimits(t *testing.T) {
+	t.Parallel()
+
+	rawTar := makeCustomTarBytes(t, []customTarEntry{
+		{header: &tar.Header{Name: "dir/", Mode: 0o750, Typeflag: tar.TypeDir}},
+		{header: &tar.Header{Name: "a.txt", Mode: 0o600, Size: 10, Typeflag: tar.TypeReg}, body: []byte("0123456789")},
+		{header: &tar.Header{Name: "b.txt", Mode: 0o600, Size: 10, Typeflag: tar.TypeReg}, body: []byte("abcdefghij")},
+	})
+
+	tarPath := filepath.Join(t.TempDir(), "unpack_bounded.tar")
+	if err := os.WriteFile(tarPath, rawTar, 0o600); err != nil {
+		t.Fatalf("write tar: %v", err)
+	}
+
+	if err := UnpackContainerWithLimits(context.Background(), tarPath, filepath.Join(t.TempDir(), "u1"), ContainerLimits{MaxEntries: 2, MaxBytes: 1024}); err == nil || !strings.Contains(err.Error(), "entry count exceeds limit") {
+		t.Fatalf("expected entry count limit error, got %v", err)
+	}
+	if err := UnpackContainerWithLimits(context.Background(), tarPath, filepath.Join(t.TempDir(), "u2"), ContainerLimits{MaxEntries: 10, MaxBytes: 15}); err == nil || !strings.Contains(err.Error(), "exceeds maximum allowed size") {
+		t.Fatalf("expected payload byte limit error, got %v", err)
+	}
+	if err := UnpackContainerWithLimits(context.Background(), tarPath, filepath.Join(t.TempDir(), "u3"), ContainerLimits{MaxEntries: 10, MaxBytes: 1024}); err != nil {
+		t.Fatalf("expected unpack within limits to succeed, got %v", err)
+	}
+}
+
+func mockOversizedWriteRootFile(_ *os.Root, _ string, _ io.Reader, _ os.FileMode, remaining int64) (int64, error) {
+	return remaining + 1, nil
+}
+
+func TestExtractTarMembersStreamOverflowMock(t *testing.T) {
+	origWriteRootFile := writeRootFileFn
+	writeRootFileFn = mockOversizedWriteRootFile
+	t.Cleanup(func() {
+		writeRootFileFn = origWriteRootFile
+	})
+
+	dst, rootObj := createTestDstRoot(t, filepath.Join(t.TempDir(), "dst"))
+	reader := makeTestTar(t,
+		[]*tar.Header{{Name: "overflow.txt", Typeflag: tar.TypeReg, Size: 4, Mode: 0o600}},
+		[][]byte{[]byte("data")},
+	)
+	if err := extractTarMembers(context.Background(), reader, dst, rootObj, ContainerLimits{MaxEntries: 10, MaxBytes: 10}); err == nil || !strings.Contains(err.Error(), "exceeds maximum allowed size") {
+		t.Fatalf("expected stream overflow error from extractTarMembers, got %v", err)
 	}
 }

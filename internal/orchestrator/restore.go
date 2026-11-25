@@ -57,7 +57,8 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 	}
 	out := resolveWriter(opts.Out)
 
-	manifest, verifyErr := archive.VerifyContainer(ctx, opts.ArchivePath)
+	limits := archive.ContainerLimitsFromGB(global.MaxArchiveGB)
+	manifest, verifyErr := archive.VerifyContainerWithLimits(ctx, opts.ArchivePath, limits)
 	if verifyErr != nil {
 		return fmt.Errorf("verify archive %q: %w", opts.ArchivePath, verifyErr)
 	}
@@ -90,7 +91,12 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 		return nil
 	}
 
-	unpackDir, mkErr := os.MkdirTemp("", fmt.Sprintf("bro-restore-%s-*", manifest.StackName))
+	workDir, workErr := o.prepareRestoreWorkDir(ctx, global, opts.ArchivePath, manifest.StackDir)
+	if workErr != nil {
+		return workErr
+	}
+
+	unpackDir, mkErr := createWorkSubdir(workDir, fmt.Sprintf("%s%s-*", restoreDirPrefix, manifest.StackName))
 	if mkErr != nil {
 		return fmt.Errorf("create restore unpack directory: %w", mkErr)
 	}
@@ -98,6 +104,20 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 	execErr := o.runRestoreSequence(ctx, global, opts.ArchivePath, unpackDir, out, &manifest, angieSel, selectedHostFiles, steps)
 	rmErr := os.RemoveAll(unpackDir)
 	return errors.Join(execErr, wrapRemoveErr(rmErr, unpackDir))
+}
+
+func (o *Orchestrator) prepareRestoreWorkDir(ctx context.Context, global *config.GlobalConfig, archivePath, stackDir string) (string, error) {
+	workDir := resolveRestoreWorkDir(global)
+	if err := validateRestoreWorkDirSeparation(workDir, stackDir); err != nil {
+		return "", err
+	}
+	if err := pruneStaleWorkDirs(workDir); err != nil {
+		return "", fmt.Errorf("prepare restore work directory: %w", err)
+	}
+	if err := o.checkRestoreFreeSpace(ctx, global, archivePath, workDir, stackDir); err != nil {
+		return "", err
+	}
+	return workDir, nil
 }
 
 func (o *Orchestrator) runRestoreSequence(
@@ -110,7 +130,8 @@ func (o *Orchestrator) runRestoreSequence(
 	selectedHostFiles []string,
 	steps []config.RestoreStep,
 ) error {
-	if err := archive.UnpackContainer(ctx, archivePath, unpackDir); err != nil {
+	limits := archive.ContainerLimitsFromGB(global.MaxArchiveGB)
+	if err := archive.UnpackContainerWithLimits(ctx, archivePath, unpackDir, limits); err != nil {
 		return fmt.Errorf("unpack container %q: %w", archivePath, err)
 	}
 

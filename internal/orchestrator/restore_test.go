@@ -122,15 +122,12 @@ func TestRestoreUserAndMkdirTempErrors(t *testing.T) {
 	}
 	archivePath := filepath.Join(bundle.Global.BackupRoot, stackName, stackName+"_2026-11-16_15-00-00.tar")
 
-	fakeDir := filepath.Join(t.TempDir(), "not_a_dir")
-	if err := os.WriteFile(fakeDir, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write fake file: %v", err)
-	}
-	t.Setenv("TMPDIR", fakeDir)
-
+	origRootMkdir := rootMkdir
+	rootMkdir = mockFailingRootMkdir
 	err := orch.Restore(context.Background(), &bundle.Global, &RestoreOptions{
 		ArchivePath: archivePath,
 	})
+	rootMkdir = origRootMkdir
 	if err == nil || !strings.Contains(err.Error(), "create restore unpack directory") {
 		t.Fatalf("expected create restore unpack directory error, got %v", err)
 	}

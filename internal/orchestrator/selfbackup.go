@@ -51,6 +51,9 @@ func (o *Orchestrator) SelfBackup(ctx context.Context, bundle *config.Bundle, op
 		return nil
 	}
 
+	if err := pruneStaleWorkDirs(backupWorkDir(bundle.Global.BackupRoot)); err != nil {
+		return fmt.Errorf("prepare selfbackup work directory: %w", err)
+	}
 	if err := o.LVM.CheckFreeSpace(ctx, bundle.Global.BackupRoot, bundle.Global.MinFreeGB); err != nil {
 		return fmt.Errorf("check free space: %w", err)
 	}
@@ -99,7 +102,7 @@ func (o *Orchestrator) buildSelfBackupContainer(
 		return "", "", fmt.Errorf("create local selfbackup directory %q: %w", localDir, err)
 	}
 
-	stagingDir, mkErr := os.MkdirTemp("", "bro-stage-self-*")
+	stagingDir, mkErr := createWorkSubdir(backupWorkDir(global.BackupRoot), stageDirPrefix+"self-*")
 	if mkErr != nil {
 		return "", "", fmt.Errorf("create selfbackup staging directory: %w", mkErr)
 	}

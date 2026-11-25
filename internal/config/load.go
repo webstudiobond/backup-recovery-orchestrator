@@ -14,33 +14,44 @@ import (
 )
 
 type globalConfigJSON struct {
-	ZstdLevel    *int                `json:"zstd_level"`
-	MinFreeGB    *uint64             `json:"min_free_gb"`
-	Retention    *RetentionOverride  `json:"retention"`
-	BackupRoot   string              `json:"backup_root"`
-	LockFile     string              `json:"lock_file"`
-	ProfilesDir  string              `json:"profiles_dir"`
-	ConfDir      string              `json:"conf_dir"`
-	Timezone     string              `json:"timezone"`
-	Angie        GlobalAngieConfig   `json:"angie"`
-	LVM          LVMConfig           `json:"lvm"`
-	Destinations []DestinationConfig `json:"destinations"`
+	ZstdLevel      *int                `json:"zstd_level"`
+	MinFreeGB      *uint64             `json:"min_free_gb"`
+	MaxArchiveGB   *uint64             `json:"max_archive_gb"`
+	Retention      *RetentionOverride  `json:"retention"`
+	BackupRoot     string              `json:"backup_root"`
+	RestoreWorkDir string              `json:"restore_work_dir"`
+	LockFile       string              `json:"lock_file"`
+	ProfilesDir    string              `json:"profiles_dir"`
+	ConfDir        string              `json:"conf_dir"`
+	Timezone       string              `json:"timezone"`
+	Angie          GlobalAngieConfig   `json:"angie"`
+	LVM            LVMConfig           `json:"lvm"`
+	Destinations   []DestinationConfig `json:"destinations"`
 }
 
-// LoadBundle reads the global config, resolves profile inheritance for every conf.d file, and validates the result.
-func LoadBundle(ctx context.Context, configPath string) (Bundle, error) {
+// LoadGlobal reads and validates only the global orchestrator configuration without loading profiles or stacks.
+func LoadGlobal(ctx context.Context, configPath string) (GlobalConfig, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return Bundle{}, fmt.Errorf("context canceled before loading config: %w", ctxErr)
+		return GlobalConfig{}, fmt.Errorf("context canceled before loading config: %w", ctxErr)
 	}
 
 	cleanConfigPath := filepath.Clean(configPath)
 	global, err := loadGlobalConfig(cleanConfigPath)
 	if err != nil {
-		return Bundle{}, err
+		return GlobalConfig{}, err
 	}
 
 	if valErr := validateGlobalConfig(&global); valErr != nil {
-		return Bundle{}, fmt.Errorf("invalid global config %q: %w", cleanConfigPath, valErr)
+		return GlobalConfig{}, fmt.Errorf("invalid global config %q: %w", cleanConfigPath, valErr)
+	}
+	return global, nil
+}
+
+// LoadBundle reads the global config, resolves profile inheritance for every conf.d file, and validates the result.
+func LoadBundle(ctx context.Context, configPath string) (Bundle, error) {
+	global, err := LoadGlobal(ctx, configPath)
+	if err != nil {
+		return Bundle{}, err
 	}
 
 	profiles, profErr := loadProfiles(global.ProfilesDir)
@@ -54,7 +65,7 @@ func LoadBundle(ctx context.Context, configPath string) (Bundle, error) {
 	}
 
 	return Bundle{
-		ConfigDir: resolveConfigDir(cleanConfigPath),
+		ConfigDir: resolveConfigDir(filepath.Clean(configPath)),
 		Global:    global,
 		Stacks:    stacks,
 	}, nil
@@ -95,6 +106,10 @@ func loadGlobalConfig(path string) (GlobalConfig, error) {
 	if backupRoot == "" {
 		backupRoot = DefaultBackupRoot
 	}
+	restoreWorkDir := strings.TrimSpace(raw.RestoreWorkDir)
+	if restoreWorkDir != "" {
+		restoreWorkDir = filepath.Clean(restoreWorkDir)
+	}
 	lockFile := strings.TrimSpace(raw.LockFile)
 	if lockFile == "" {
 		lockFile = DefaultLockFile
@@ -108,6 +123,10 @@ func loadGlobalConfig(path string) (GlobalConfig, error) {
 	minFreeGB := uint64(DefaultMinFreeGB)
 	if raw.MinFreeGB != nil {
 		minFreeGB = *raw.MinFreeGB
+	}
+	maxArchiveGB := uint64(DefaultMaxArchiveGB)
+	if raw.MaxArchiveGB != nil {
+		maxArchiveGB = *raw.MaxArchiveGB
 	}
 	zstdLevel := DefaultZstdLevel
 	if raw.ZstdLevel != nil {
@@ -124,17 +143,19 @@ func loadGlobalConfig(path string) (GlobalConfig, error) {
 	}
 
 	return GlobalConfig{
-		BackupRoot:   filepath.Clean(backupRoot),
-		LockFile:     filepath.Clean(lockFile),
-		ProfilesDir:  profilesDir,
-		ConfDir:      confDir,
-		Timezone:     tz,
-		Angie:        cleanGlobalAngie(&raw.Angie),
-		LVM:          raw.LVM,
-		Retention:    retention,
-		Destinations: cleanGlobalDestinations(raw.Destinations),
-		MinFreeGB:    minFreeGB,
-		ZstdLevel:    zstdLevel,
+		BackupRoot:     filepath.Clean(backupRoot),
+		RestoreWorkDir: restoreWorkDir,
+		LockFile:       filepath.Clean(lockFile),
+		ProfilesDir:    profilesDir,
+		ConfDir:        confDir,
+		Timezone:       tz,
+		Angie:          cleanGlobalAngie(&raw.Angie),
+		LVM:            raw.LVM,
+		Retention:      retention,
+		Destinations:   cleanGlobalDestinations(raw.Destinations),
+		MinFreeGB:      minFreeGB,
+		MaxArchiveGB:   maxArchiveGB,
+		ZstdLevel:      zstdLevel,
 	}, nil
 }
 

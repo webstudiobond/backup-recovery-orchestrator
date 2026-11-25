@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/archive"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/cmdexec"
@@ -15,8 +16,10 @@ import (
 )
 
 var (
-	jsonMarshalIndent = json.MarshalIndent
-	newOrchestrator   = orchestrator.New
+	jsonMarshalIndent       = json.MarshalIndent
+	newOrchestrator         = orchestrator.New
+	osStat                  = os.Stat
+	defaultVerifyConfigPath = config.DefaultConfigPath
 )
 
 func runBackupCmd(ctx context.Context, args []string, out, errOut io.Writer, runner cmdexec.Runner) error {
@@ -230,6 +233,7 @@ func runDACCmd(ctx context.Context, args []string, out, errOut io.Writer, runner
 func runVerifyCmd(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.SetOutput(errOut)
+	cfgPath := fs.String("config", "", "optional path to global config.json (defaults to "+config.DefaultConfigPath+" if present)")
 	archiveFlag := fs.String("f", "", "path to backup archive (.tar)")
 	pos, parseErr := parseFlagsWithPositional(fs, args)
 	if parseErr != nil {
@@ -241,7 +245,12 @@ func runVerifyCmd(ctx context.Context, args []string, out, errOut io.Writer) err
 		return archErr
 	}
 
-	manifest, err := archive.VerifyContainer(ctx, archivePath)
+	limits, limErr := resolveVerifyLimits(ctx, *cfgPath)
+	if limErr != nil {
+		return limErr
+	}
+
+	manifest, err := archive.VerifyContainerWithLimits(ctx, archivePath, limits)
 	if err != nil {
 		return fmt.Errorf("verify container: %w", err)
 	}
@@ -254,6 +263,25 @@ func runVerifyCmd(ctx context.Context, args []string, out, errOut io.Writer) err
 		archivePath, kind, manifest.StackName, manifest.CreatedAt, len(manifest.Artifacts),
 		manifest.Angie.DomainConfs, manifest.Angie.StreamConfs, manifest.Angie.ACMENames, len(manifest.HostFiles))
 	return nil
+}
+
+func resolveVerifyLimits(ctx context.Context, cfgPath string) (archive.ContainerLimits, error) {
+	targetPath := cfgPath
+	if targetPath == "" {
+		_, statErr := osStat(defaultVerifyConfigPath)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return archive.ContainerLimits{}, nil
+		}
+		if statErr != nil {
+			return archive.ContainerLimits{}, fmt.Errorf("stat default configuration %q: %w", defaultVerifyConfigPath, statErr)
+		}
+		targetPath = defaultVerifyConfigPath
+	}
+	global, err := config.LoadGlobal(ctx, targetPath)
+	if err != nil {
+		return archive.ContainerLimits{}, fmt.Errorf("load configuration: %w", err)
+	}
+	return archive.ContainerLimitsFromGB(global.MaxArchiveGB), nil
 }
 
 func runConfigCmd(ctx context.Context, args []string, out, errOut io.Writer) error {

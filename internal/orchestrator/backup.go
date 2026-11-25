@@ -50,6 +50,10 @@ func (o *Orchestrator) Backup(ctx context.Context, bundle *config.Bundle, opts *
 		return nil
 	}
 
+	if err := pruneStaleWorkDirs(backupWorkDir(bundle.Global.BackupRoot)); err != nil {
+		return fmt.Errorf("prepare backup work directory: %w", err)
+	}
+
 	var stackErrs []error
 	for i := range targets {
 		if stackErr := o.backupSingleStack(ctx, out, &bundle.Global, &targets[i], opts.NoSync); stackErr != nil {
@@ -91,7 +95,7 @@ func (o *Orchestrator) backupSingleStack(ctx context.Context, out io.Writer, glo
 		return fmt.Errorf("create local backup directory %q: %w", localStackDir, err)
 	}
 
-	stagingDir, mkErr := os.MkdirTemp("", fmt.Sprintf("bro-stage-%s-*", stack.Name))
+	stagingDir, mkErr := createWorkSubdir(backupWorkDir(global.BackupRoot), fmt.Sprintf("%s%s-*", stageDirPrefix, stack.Name))
 	if mkErr != nil {
 		return fmt.Errorf("create staging directory: %w", mkErr)
 	}

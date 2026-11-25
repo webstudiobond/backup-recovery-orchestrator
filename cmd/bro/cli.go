@@ -137,7 +137,7 @@ Subcommands:
   sync        [--config FILE] [--all | STACK...] [--destination NAME]
   restore     [--config FILE] [--dry-run] [--angie=none|all] [--angie-domains=...] [--angie-streams=...] [--angie-certs=...] [--host-files=none|all] [--skip-steps=...] [--only-steps=...] [-f FILE | <archive.tar>]
   dac         [--config FILE] [--dry-run] <stack>
-  verify      [-f FILE | <archive.tar>]
+  verify      [--config FILE] [-f FILE | <archive.tar>]
   config      validate [--config FILE]
   config      show [--config FILE] <stack>
   version

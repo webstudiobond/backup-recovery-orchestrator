@@ -356,6 +356,29 @@ func TestDecodeStrictJSONFileAndGlobalConfig(t *testing.T) {
 	if global.ProfilesDir != absProfilesDir || global.ConfDir != absConfDir {
 		t.Fatalf("expected absolute paths to be preserved, got profiles=%q conf=%q", global.ProfilesDir, global.ConfDir)
 	}
+	if global.MaxArchiveGB != DefaultMaxArchiveGB || global.RestoreWorkDir != "" {
+		t.Fatalf("expected default max_archive_gb=%d and empty restore_work_dir, got %d and %q", DefaultMaxArchiveGB, global.MaxArchiveGB, global.RestoreWorkDir)
+	}
+
+	customCfgPath := filepath.Join(dir, "custom.json")
+	writeTestFile(t, customCfgPath, `{
+		"restore_work_dir": " /home/.bro-work/ ",
+		"max_archive_gb": 250,
+		"lvm": {
+			"vg_name": "vg_main",
+			"lv_name": "lv_main",
+			"snapshot_name": "snap_main",
+			"snapshot_size": "10G",
+			"mount_point": "/mnt/main"
+		}
+	}`)
+	customGlobal, err := loadGlobalConfig(customCfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error loading custom global config: %v", err)
+	}
+	if customGlobal.RestoreWorkDir != "/home/.bro-work" || customGlobal.MaxArchiveGB != 250 {
+		t.Fatalf("unexpected custom fields: restore_work_dir=%q max_archive_gb=%d", customGlobal.RestoreWorkDir, customGlobal.MaxArchiveGB)
+	}
 }
 
 func TestLoadBundleWithProfilesError(t *testing.T) {
@@ -378,5 +401,53 @@ func TestLoadBundleWithProfilesError(t *testing.T) {
 
 	if _, err := LoadBundle(context.Background(), cfgPath); err == nil {
 		t.Fatalf("expected LoadBundle to fail when profile decoding fails, got nil")
+	}
+}
+
+func TestLoadGlobalStandalone(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := LoadGlobal(canceledCtx, "/nonexistent/config.json"); err == nil {
+		t.Fatal("expected canceled context error from LoadGlobal")
+	}
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "standalone.json")
+	writeTestFile(t, cfgPath, fmt.Sprintf(`{
+		"conf_dir": %q,
+		"max_archive_gb": 300,
+		"lvm": {
+			"vg_name": "vg_dr",
+			"lv_name": "lv_dr",
+			"snapshot_name": "snap_dr",
+			"snapshot_size": "5G",
+			"mount_point": "/mnt/dr"
+		}
+	}`, filepath.Join(dir, "missing_conf_d")))
+
+	global, err := LoadGlobal(ctx, cfgPath)
+	if err != nil {
+		t.Fatalf("expected LoadGlobal to succeed without conf_dir, got: %v", err)
+	}
+	if global.MaxArchiveGB != 300 || global.MinFreeGB != DefaultMinFreeGB {
+		t.Fatalf("unexpected global config limits: max_archive_gb=%d min_free_gb=%d", global.MaxArchiveGB, global.MinFreeGB)
+	}
+
+	invalidCfgPath := filepath.Join(dir, "invalid.json")
+	writeTestFile(t, invalidCfgPath, `{
+		"max_archive_gb": 0,
+		"lvm": {
+			"vg_name": "vg_dr",
+			"lv_name": "lv_dr",
+			"snapshot_name": "snap_dr",
+			"snapshot_size": "5G",
+			"mount_point": "/mnt/dr"
+		}
+	}`)
+	if _, err := LoadGlobal(ctx, invalidCfgPath); err == nil {
+		t.Fatal("expected validation error for max_archive_gb=0")
 	}
 }

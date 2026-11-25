@@ -445,10 +445,15 @@ func TestDACCommand(t *testing.T) {
 }
 
 func TestVerifyCommand(t *testing.T) {
-	t.Parallel()
+	origDefaultVerifyCfg := defaultVerifyConfigPath
+	t.Cleanup(func() {
+		defaultVerifyConfigPath = origDefaultVerifyCfg
+	})
 
 	ctx := context.Background()
 	root := t.TempDir()
+	defaultVerifyConfigPath = filepath.Join(root, "absent-default.json")
+	cfgPath := writeFixtureConfig(t, root)
 	tarPath := createTestArchive(ctx, t, root, "app-beta", "")
 	selfTarPath := createTestArchive(ctx, t, root, "self_backup", archive.SelfBackupKind)
 
@@ -463,6 +468,11 @@ func TestVerifyCommand(t *testing.T) {
 			wantErr: "parse verify flags",
 		},
 		{
+			name:    "verify invalid config path",
+			args:    []string{"-config", filepath.Join(root, "missing.json"), tarPath},
+			wantErr: "load configuration",
+		},
+		{
 			name:    "verify nonexistent archive",
 			args:    []string{"/no-archive.tar"},
 			wantErr: "verify container",
@@ -470,6 +480,11 @@ func TestVerifyCommand(t *testing.T) {
 		{
 			name:    "verify valid archive positional",
 			args:    []string{tarPath},
+			wantOut: "verified archive",
+		},
+		{
+			name:    "verify valid archive with config flag",
+			args:    []string{"--config=" + cfgPath, "-f", tarPath},
 			wantOut: "verified archive",
 		},
 		{
@@ -485,6 +500,76 @@ func TestVerifyCommand(t *testing.T) {
 	}
 
 	runSubcommandSuite(ctx, t, "verify", "", cases)
+
+	origOsStat := osStat
+	t.Cleanup(func() { osStat = origOsStat })
+
+	badDefaultCfg := filepath.Join(root, "bad-default.json")
+	if err := os.WriteFile(badDefaultCfg, []byte("{invalid"), 0o600); err != nil {
+		t.Fatalf("write bad default config: %v", err)
+	}
+	standaloneCfg := filepath.Join(root, "standalone-default.json")
+	standaloneJSON := `{
+  "backup_root": "` + filepath.Join(root, "backups") + `",
+  "conf_dir": "` + filepath.Join(root, "absent-conf.d") + `",
+  "max_archive_gb": 250,
+  "lvm": {
+    "vg_name": "ubuntu-vg",
+    "lv_name": "lv_home",
+    "snapshot_name": "home_snap",
+    "snapshot_size": "35G",
+    "mount_point": "` + filepath.Join(root, "mnt", "snap") + `"
+  }
+}`
+	if err := os.WriteFile(standaloneCfg, []byte(standaloneJSON), 0o600); err != nil {
+		t.Fatalf("write standalone config: %v", err)
+	}
+
+	defaultCases := []struct {
+		setup   func()
+		wantErr string
+	}{
+		{
+			setup: func() {
+				defaultVerifyConfigPath = cfgPath
+			},
+		},
+		{
+			setup: func() {
+				defaultVerifyConfigPath = standaloneCfg
+			},
+		},
+		{
+			setup: func() {
+				defaultVerifyConfigPath = badDefaultCfg
+			},
+			wantErr: "load configuration",
+		},
+		{
+			setup: func() {
+				osStat = func(string) (os.FileInfo, error) { return nil, os.ErrPermission }
+			},
+			wantErr: "stat default configuration",
+		},
+	}
+	for _, tc := range defaultCases {
+		osStat = origOsStat
+		tc.setup()
+		var outBuf, errBuf strings.Builder
+		err := run(ctx, []string{"verify", tarPath}, &outBuf, &errBuf, fakeCLIRunner{})
+		if tc.wantErr == "" && err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Fatalf("expected error containing %q, got: %v", tc.wantErr, err)
+		}
+	}
+
+	defaultVerifyConfigPath = filepath.Join(root, "absent-default.json")
+	var outBuf, errBuf strings.Builder
+	if err := run(ctx, []string{"verify", "--config=" + standaloneCfg, tarPath}, &outBuf, &errBuf, fakeCLIRunner{}); err != nil {
+		t.Fatalf("expected explicit standalone config verify to succeed, got: %v", err)
+	}
 }
 
 func TestConfigCommand(t *testing.T) {

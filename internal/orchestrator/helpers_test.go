@@ -383,6 +383,14 @@ func mockFailingFileStat(_ *os.File) (fs.FileInfo, error) {
 	return nil, errors.New("simulated file stat error")
 }
 
+func mockFailingRootRemoveAll(_ *os.Root, _ string) error {
+	return errors.New("simulated root removeall error")
+}
+
+func mockFailingOSStat(_ string) (fs.FileInfo, error) {
+	return nil, errors.New("simulated os stat error")
+}
+
 type fakeDirEntry struct {
 	infoErr error
 	name    string

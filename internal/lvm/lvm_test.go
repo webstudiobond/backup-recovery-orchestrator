@@ -3,6 +3,7 @@ package lvm
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +227,21 @@ func TestCheckFreeSpaceDefaultAvailFn(t *testing.T) {
 	mgr := &Manager{Runner: &fakeLVMRunner{}}
 	if err := mgr.CheckFreeSpace(context.Background(), t.TempDir(), 1); err != nil {
 		t.Fatalf("unexpected error with default avail bytes: %v", err)
+	}
+	if err := mgr.CheckFreeSpace(context.Background(), t.TempDir(), math.MaxUint64); err == nil || !strings.Contains(err.Error(), "exceeds representable byte limit") {
+		t.Fatalf("expected overflow error, got %v", err)
+	}
+	lowMgr := &Manager{
+		Runner: &fakeLVMRunner{},
+		AvailBytesFn: func(string) (uint64, error) {
+			return 1024, nil
+		},
+	}
+	if err := lowMgr.CheckFreeSpaceBytes(context.Background(), "/backups", 2048); err == nil || !strings.Contains(err.Error(), "insufficient free space") {
+		t.Fatalf("expected insufficient free space error, got %v", err)
+	}
+	if err := lowMgr.CheckFreeSpaceBytes(context.Background(), "/backups", 512); err != nil {
+		t.Fatalf("expected CheckFreeSpaceBytes to succeed, got %v", err)
 	}
 }
 

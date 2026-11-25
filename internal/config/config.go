@@ -9,7 +9,8 @@ const (
 	DefaultBackupRoot      = "/backups"
 	DefaultLockFile        = "/run/lock/bro.lock"
 	DefaultZstdLevel       = 6
-	DefaultMinFreeGB       = 15
+	DefaultMinFreeGB       = 3
+	DefaultMaxArchiveGB    = 100
 	DefaultLocalRetention  = 3
 	DefaultRemoteRetain    = 7
 	DefaultWaitTimeoutSec  = 30
@@ -30,17 +31,19 @@ const (
 
 // GlobalConfig stores host-wide orchestrator paths, LVM defaults, retention rules, and offsite destinations.
 type GlobalConfig struct {
-	BackupRoot   string              `json:"backup_root"`
-	LockFile     string              `json:"lock_file"`
-	ProfilesDir  string              `json:"profiles_dir"`
-	ConfDir      string              `json:"conf_dir"`
-	Timezone     string              `json:"timezone"`
-	Angie        GlobalAngieConfig   `json:"angie"`
-	LVM          LVMConfig           `json:"lvm"`
-	Retention    RetentionConfig     `json:"retention"`
-	Destinations []DestinationConfig `json:"destinations"`
-	MinFreeGB    uint64              `json:"min_free_gb"`
-	ZstdLevel    int                 `json:"zstd_level"`
+	BackupRoot     string              `json:"backup_root"`
+	RestoreWorkDir string              `json:"restore_work_dir,omitempty"`
+	LockFile       string              `json:"lock_file"`
+	ProfilesDir    string              `json:"profiles_dir"`
+	ConfDir        string              `json:"conf_dir"`
+	Timezone       string              `json:"timezone"`
+	Angie          GlobalAngieConfig   `json:"angie"`
+	LVM            LVMConfig           `json:"lvm"`
+	Retention      RetentionConfig     `json:"retention"`
+	Destinations   []DestinationConfig `json:"destinations"`
+	MinFreeGB      uint64              `json:"min_free_gb"`
+	MaxArchiveGB   uint64              `json:"max_archive_gb"`
+	ZstdLevel      int                 `json:"zstd_level"`
 }
 
 // LVMConfig identifies the volume group, origin logical volume, and temporary snapshot mount target.

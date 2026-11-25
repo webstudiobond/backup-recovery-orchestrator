@@ -1,9 +1,11 @@
 {
   "backup_root": "/backups",
+  "restore_work_dir": "/home/.bro-work",
   "timezone": "local",
   "lock_file": "/run/lock/bro.lock",
   "zstd_level": 9,
   "min_free_gb": 15,
+  "max_archive_gb": 100,
   "lvm": {
     "vg_name": "ubuntu-vg",
     "lv_name": "lv_home",

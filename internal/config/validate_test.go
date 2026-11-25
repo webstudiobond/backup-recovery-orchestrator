@@ -820,10 +820,11 @@ func TestValidateGlobalConfig(t *testing.T) {
 
 	baseGlobal := func() GlobalConfig {
 		return GlobalConfig{
-			BackupRoot: "/var/backups",
-			LockFile:   "/var/run/bro.lock",
-			ZstdLevel:  3,
-			Timezone:   TimezoneUTC,
+			BackupRoot:   "/var/backups",
+			LockFile:     "/var/run/bro.lock",
+			MaxArchiveGB: DefaultMaxArchiveGB,
+			ZstdLevel:    3,
+			Timezone:     TimezoneUTC,
 			LVM: LVMConfig{
 				VGName:       "vg_system",
 				LVName:       "lv_system",
@@ -847,6 +848,34 @@ func TestValidateGlobalConfig(t *testing.T) {
 			name: "relative backup_root path",
 			modify: func(c *GlobalConfig) {
 				c.BackupRoot = "relative/backup_root"
+			},
+			wantErr: true,
+		},
+		{
+			name: "relative restore_work_dir path",
+			modify: func(c *GlobalConfig) {
+				c.RestoreWorkDir = "relative/work"
+			},
+			wantErr: true,
+		},
+		{
+			name: "root restore_work_dir path",
+			modify: func(c *GlobalConfig) {
+				c.RestoreWorkDir = "/"
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid restore_work_dir path",
+			modify: func(c *GlobalConfig) {
+				c.RestoreWorkDir = "/home/.bro-work"
+			},
+			wantErr: false,
+		},
+		{
+			name: "zero max_archive_gb",
+			modify: func(c *GlobalConfig) {
+				c.MaxArchiveGB = 0
 			},
 			wantErr: true,
 		},
