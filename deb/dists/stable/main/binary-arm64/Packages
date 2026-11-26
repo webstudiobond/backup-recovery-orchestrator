@@ -1,15 +1,15 @@
 Package: bro
-Version: 0.2.0
+Version: 0.3.0
 Architecture: arm64
 Maintainer: underhax <https://github.com/underhax>
-Installed-Size: 3733
+Installed-Size: 3861
 Pre-Depends: lvm2
 Depends: systemd, lvm2, docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin, tar, zstd, mount, passwd
-Filename: pool/main/bro_0.2.0_arm64.deb
-Size: 1561840
-MD5sum: 79d459bb1145291930401052fc0613a6
-SHA1: 53a9ed3b0ee266227abfb4bf403201ab4b07fd18
-SHA256: 908ccdb39cb2fd7510b75112d512e83a97499188cd4b7534f5733ebb84ec5306
+Filename: pool/main/bro_0.3.0_arm64.deb
+Size: 1616768
+MD5sum: 7e65d2ae4ea0fcb5f8819a6ee1d994b1
+SHA1: 58230fd16b767fb5ba26742a054dc835a41c95b6
+SHA256: 16d68df20009113884c14014bd76571a4c164daae3c54fc4ebeecfcdec154a50
 Section: admin
 Priority: optional
 Homepage: https://github.com/webstudiobond/backup-recovery-orchestrator
