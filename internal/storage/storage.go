@@ -15,10 +15,7 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/mount"
 )
 
-const (
-	copyBufferSize  = 1 << 20
-	timestampLayout = "2006-01-02_15-04-05"
-)
+const copyBufferSize = 1 << 20
 
 // SyncResult records which archives were copied, skipped, or pruned on a destination.
 type SyncResult struct {

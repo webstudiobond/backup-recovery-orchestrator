@@ -100,7 +100,7 @@ func (v *Verifier) waitForMount(ctx context.Context, dest *config.DestinationCon
 	var startErr error
 	if strings.TrimSpace(dest.SystemdUnit) != "" {
 		startErr = v.Runner.Run(ctx, &cmdexec.Spec{
-			Name: "systemctl",
+			Name: cmdexec.BinSystemctl,
 			Args: []string{"start", dest.SystemdUnit},
 		})
 	}
@@ -141,7 +141,7 @@ func (v *Verifier) waitForMount(ctx context.Context, dest *config.DestinationCon
 func (v *Verifier) isGenericMountActive(ctx context.Context, mountPoint string) (active bool, reason string) {
 	cleanPath := filepath.Clean(mountPoint)
 	if err := v.Runner.Run(ctx, &cmdexec.Spec{
-		Name: "mountpoint",
+		Name: cmdexec.BinMountpoint,
 		Args: []string{"-q", cleanPath},
 	}); err != nil {
 		return false, fmt.Sprintf("mountpoint check failed: %v", err)

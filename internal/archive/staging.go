@@ -7,12 +7,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/reverseproxy"
 )
 
 var (
@@ -56,21 +55,14 @@ func StageReverseProxyAssets(
 }
 
 func openReverseProxySubRoot(reverseProxyRoot *os.Root, rawRel, field string) (*os.Root, error) {
-	trimmed := strings.TrimSpace(rawRel)
-	if trimmed == "" {
-		return nil, fmt.Errorf("reverse_proxy_provider.%s is required", field)
-	}
-	if strings.Contains(trimmed, "\x00") || filepath.IsAbs(trimmed) || !filepath.IsLocal(filepath.FromSlash(trimmed)) {
-		return nil, fmt.Errorf("reverse_proxy_provider.%s %q must stay inside stack_dir", field, rawRel)
-	}
-	cleaned := path.Clean(filepath.ToSlash(trimmed))
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-		return nil, fmt.Errorf("reverse_proxy_provider.%s %q must stay inside stack_dir", field, rawRel)
+	cleaned, err := reverseproxy.CleanRelativeDir(rawRel, "reverse_proxy_provider."+field, true)
+	if err != nil {
+		return nil, fmt.Errorf("validate reverse_proxy_provider.%s: %w", field, err)
 	}
 
-	subRoot, err := rootOpenSubRoot(reverseProxyRoot, filepath.FromSlash(cleaned))
-	if err != nil {
-		return nil, fmt.Errorf("open reverse_proxy_provider.%s %q: %w", field, cleaned, err)
+	subRoot, openErr := rootOpenSubRoot(reverseProxyRoot, filepath.FromSlash(cleaned))
+	if openErr != nil {
+		return nil, fmt.Errorf("open reverse_proxy_provider.%s %q: %w", field, cleaned, openErr)
 	}
 	return subRoot, nil
 }

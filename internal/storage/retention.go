@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 )
 
 // PruneLocal deletes expired local archives while enforcing that at least one local copy always remains.
@@ -82,10 +84,10 @@ func parseStackArchiveTime(fileName, stackName string) (time.Time, bool) {
 	}
 	stamp := strings.TrimSuffix(strings.TrimPrefix(fileName, prefix), suffix)
 	if baseStamp, ok := strings.CutSuffix(stamp, "_UTC"); ok {
-		parsed, err := time.Parse(timestampLayout, baseStamp)
+		parsed, err := time.Parse(config.ArchiveTimestampLayout, baseStamp)
 		return parsed, err == nil
 	}
-	parsed, err := time.ParseInLocation(timestampLayout, stamp, time.Local)
+	parsed, err := time.ParseInLocation(config.ArchiveTimestampLayout, stamp, time.Local)
 	return parsed, err == nil
 }
 

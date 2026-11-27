@@ -29,7 +29,8 @@ func TestSelfBackupAndRestoreRejection(t *testing.T) {
 	runner := &fakeOrchRunner{snapMount: bundle.Global.LVM.MountPoint, stackName: stackName}
 	orch := newTestOrchestrator(runner, pPath, gPath, nil)
 
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{
+	validated := mustValidateBundle(t, &bundle)
+	if err := orch.Backup(ctx, validated, &BackupOptions{
 		Stacks: []string{stackName},
 		NoSync: true,
 		Out:    io.Discard,
@@ -42,7 +43,7 @@ func TestSelfBackupAndRestoreRejection(t *testing.T) {
 	}
 
 	var dryBuf bytes.Buffer
-	if err := orch.SelfBackup(ctx, &bundle, &SelfBackupOptions{
+	if err := orch.SelfBackup(ctx, validated, &SelfBackupOptions{
 		Out:    &dryBuf,
 		DryRun: true,
 	}); err != nil {
@@ -56,7 +57,7 @@ func TestSelfBackupAndRestoreRejection(t *testing.T) {
 		}
 	}
 
-	if err := orch.SelfBackup(ctx, &bundle, &SelfBackupOptions{Out: io.Discard}); err != nil {
+	if err := orch.SelfBackup(ctx, validated, &SelfBackupOptions{Out: io.Discard}); err != nil {
 		t.Fatalf("SelfBackup failed: %v", err)
 	}
 
@@ -74,7 +75,7 @@ func TestSelfBackupAndRestoreRejection(t *testing.T) {
 		t.Fatalf("expected synced selfbackup at %q: %v", remoteSelfTar, statErr)
 	}
 
-	restoreErr := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
+	restoreErr := orch.Restore(ctx, validated, &RestoreOptions{
 		ArchivePath: localSelfTar,
 		DryRun:      true,
 		Out:         io.Discard,
@@ -232,9 +233,10 @@ func TestSelfBackupValidation(t *testing.T) {
 	orch := newTestOrchestrator(&fakeOrchRunner{}, pPath, gPath, nil)
 	bundle := buildTestBundle(t, root, "app-self-val")
 
+	validated := mustValidateBundle(t, &bundle)
 	canceledCtx, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := orch.SelfBackup(canceledCtx, &bundle, nil); err == nil || !strings.Contains(err.Error(), "context canceled before selfbackup") {
+	if err := orch.SelfBackup(canceledCtx, validated, nil); err == nil || !strings.Contains(err.Error(), "context canceled before selfbackup") {
 		t.Fatalf("expected canceled context error, got %v", err)
 	}
 
@@ -246,7 +248,7 @@ func TestSelfBackupValidation(t *testing.T) {
 	if err := os.WriteFile(orch.SystemdDir, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	if err := orch.SelfBackup(ctx, &bundle, nil); err == nil || !strings.Contains(err.Error(), "read systemd unit directory") {
+	if err := orch.SelfBackup(ctx, validated, nil); err == nil || !strings.Contains(err.Error(), "read systemd unit directory") {
 		t.Fatalf("expected collect items error, got %v", err)
 	}
 	orch.SystemdDir = ""
@@ -254,7 +256,7 @@ func TestSelfBackupValidation(t *testing.T) {
 	orch.LVM.AvailBytesFn = func(_ string) (uint64, error) {
 		return 0, errors.New("simulated space check failure")
 	}
-	if err := orch.SelfBackup(ctx, &bundle, nil); err == nil || !strings.Contains(err.Error(), "check free space") {
+	if err := orch.SelfBackup(ctx, validated, nil); err == nil || !strings.Contains(err.Error(), "check free space") {
 		t.Fatalf("expected check free space error, got %v", err)
 	}
 	orch.LVM.AvailBytesFn = nil
@@ -265,14 +267,14 @@ func TestSelfBackupValidation(t *testing.T) {
 	}
 	badBundle := bundle
 	badBundle.Global.BackupRoot = fileAsRoot
-	if err := orch.SelfBackup(ctx, &badBundle, nil); err == nil || !strings.Contains(err.Error(), "prepare selfbackup work directory") {
+	if err := orch.SelfBackup(ctx, mustValidateBundle(t, &badBundle), nil); err == nil || !strings.Contains(err.Error(), "prepare selfbackup work directory") {
 		t.Fatalf("expected prepare selfbackup work directory error, got %v", err)
 	}
 
 	origRootMkdir := rootMkdir
 	rootMkdir = mockFailingRootMkdir
 	defer func() { rootMkdir = origRootMkdir }()
-	if err := orch.SelfBackup(ctx, &bundle, nil); err == nil || !strings.Contains(err.Error(), "create selfbackup staging directory") {
+	if err := orch.SelfBackup(ctx, validated, nil); err == nil || !strings.Contains(err.Error(), "create selfbackup staging directory") {
 		t.Fatalf("expected create selfbackup staging directory error, got %v", err)
 	}
 }
@@ -295,9 +297,10 @@ func TestSelfBackupExecutionAndPrune(t *testing.T) {
 		}
 	}
 
+	validated := mustValidateBundle(t, &bundle)
 	orch.Now = nil
 	var outBuf bytes.Buffer
-	if err := orch.SelfBackup(context.Background(), &bundle, &SelfBackupOptions{
+	if err := orch.SelfBackup(context.Background(), validated, &SelfBackupOptions{
 		Out:    &outBuf,
 		NoSync: true,
 	}); err != nil {
@@ -320,7 +323,7 @@ func TestSelfBackupExecutionAndPrune(t *testing.T) {
 	if err := os.WriteFile(failBundle.Global.Destinations[0].BackupDir, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	if err := orch.SelfBackup(context.Background(), &failBundle, &SelfBackupOptions{
+	if err := orch.SelfBackup(context.Background(), mustValidateBundle(t, &failBundle), &SelfBackupOptions{
 		Out: io.Discard,
 	}); err == nil || !strings.Contains(err.Error(), "create remote backup directory") {
 		t.Fatalf("expected destination sync error, got %v", err)
@@ -337,7 +340,7 @@ func TestSelfBackupExecutionAndPrune(t *testing.T) {
 	}
 	cancelStatFn := func(_ string) (int64, error) { return 0, errors.New("simulated stat fail") }
 	cancelOrch := newTestOrchestrator(cancelRunner, pPath, gPath, cancelStatFn)
-	if err := cancelOrch.SelfBackup(ctx, &bundle, &SelfBackupOptions{
+	if err := cancelOrch.SelfBackup(ctx, validated, &SelfBackupOptions{
 		Out: io.Discard,
 	}); err == nil || !strings.Contains(err.Error(), "prune local selfbackups") {
 		t.Fatalf("expected prune local selfbackups error, got %v", err)

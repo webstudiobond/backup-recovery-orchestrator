@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
-	"github.com/webstudiobond/backup-recovery-orchestrator/internal/reverseproxy"
 )
 
 func TestStageReverseProxyAssets(t *testing.T) {
@@ -52,7 +51,7 @@ func TestStageReverseProxyAssets(t *testing.T) {
 			Name:     name,
 			StackDir: stackDir,
 			ReverseProxyProvider: &config.ReverseProxyProviderConfig{
-				Type:        reverseproxy.TypeAngie,
+				Type:        "angie",
 				ServiceName: "reverse-proxy-" + name,
 				DomainsDir:  domainsRel,
 				StreamDir:   streamRel,

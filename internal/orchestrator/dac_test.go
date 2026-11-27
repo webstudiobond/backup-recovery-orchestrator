@@ -39,7 +39,7 @@ func TestApplyDACLiveDryRunAndApply(t *testing.T) {
 	})
 
 	var dryBuf bytes.Buffer
-	if dryErr := orch.ApplyDAC(ctx, &bundle, &DACOptions{
+	if dryErr := orch.ApplyDAC(ctx, mustValidateBundle(t, &bundle), &DACOptions{
 		Out:    &dryBuf,
 		Stack:  stackName,
 		DryRun: true,
@@ -54,7 +54,7 @@ func TestApplyDACLiveDryRunAndApply(t *testing.T) {
 	}
 
 	var applyBuf bytes.Buffer
-	if applyErr := orch.ApplyDAC(ctx, &bundle, &DACOptions{
+	if applyErr := orch.ApplyDAC(ctx, mustValidateBundle(t, &bundle), &DACOptions{
 		Out:   &applyBuf,
 		Stack: stackName,
 	}); applyErr != nil {
@@ -69,7 +69,7 @@ func TestApplyDACLiveDryRunAndApply(t *testing.T) {
 	bundle.Stacks[0].HostFiles[0].Owner = curOwner
 
 	var idempotentBuf bytes.Buffer
-	if idemErr := orch.ApplyDAC(ctx, &bundle, &DACOptions{
+	if idemErr := orch.ApplyDAC(ctx, mustValidateBundle(t, &bundle), &DACOptions{
 		Out:    &idempotentBuf,
 		Stack:  stackName,
 		DryRun: true,
@@ -90,8 +90,9 @@ func TestApplyDACErrors(t *testing.T) {
 
 	canceledCtx, cancel := context.WithCancel(ctx)
 	cancel()
-	bInit := buildTestBundle(t, root, stackName)
-	if err := orch.ApplyDAC(canceledCtx, &bInit, &DACOptions{Stack: stackName}); err == nil {
+	bInitVal := buildTestBundle(t, root, stackName)
+	bInit := mustValidateBundle(t, &bInitVal)
+	if err := orch.ApplyDAC(canceledCtx, bInit, &DACOptions{Stack: stackName}); err == nil {
 		t.Fatal("expected error on canceled context")
 	}
 
@@ -99,7 +100,7 @@ func TestApplyDACErrors(t *testing.T) {
 		t.Fatal("expected error on nil bundle")
 	}
 
-	if err := orch.ApplyDAC(ctx, &bInit, nil); err == nil {
+	if err := orch.ApplyDAC(ctx, bInit, nil); err == nil {
 		t.Fatal("expected error on nil options")
 	}
 
@@ -161,10 +162,10 @@ func TestApplyDACErrors(t *testing.T) {
 			wantErr: "is not a directory",
 		},
 		{
-			name: "stack DAC escape rejected",
+			name: "stack DAC missing non-optional target rejected",
 			setup: func(_ *testing.T, b *config.Bundle) {
 				b.Stacks[0].DAC = []config.DACRule{
-					{Path: "../escape", Owner: "1001:1001", FileMode: "0600"},
+					{Path: "missing_subpath", Owner: "1001:1001", FileMode: "0600"},
 				}
 			},
 			stack:   stackName,
@@ -189,7 +190,7 @@ func TestApplyDACErrors(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(t, &b)
 			}
-			applyErr := orch.ApplyDAC(ctx, &b, &DACOptions{Stack: tc.stack, DryRun: true})
+			applyErr := orch.ApplyDAC(ctx, mustValidateBundle(t, &b), &DACOptions{Stack: tc.stack, DryRun: true})
 			if applyErr == nil || !strings.Contains(applyErr.Error(), tc.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, applyErr)
 			}

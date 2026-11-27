@@ -193,7 +193,7 @@ func (e *Engine) streamTarToZstdFile(ctx context.Context, tarArgs []string, zstd
 	tarDone := make(chan error, 1)
 	go func() {
 		tarErr := e.Runner.Run(streamCtx, &cmdexec.Spec{
-			Name:   "tar",
+			Name:   cmdexec.BinTar,
 			Args:   tarArgs,
 			Stdout: io.MultiWriter(pw, cw),
 		})
@@ -204,7 +204,7 @@ func (e *Engine) streamTarToZstdFile(ctx context.Context, tarArgs []string, zstd
 	}()
 
 	zstdErr := e.Runner.Run(streamCtx, &cmdexec.Spec{
-		Name:   "zstd",
+		Name:   cmdexec.BinZstd,
 		Args:   []string{fmt.Sprintf("-%d", zstdLevel), "-q"},
 		Stdin:  pr,
 		Stdout: outFile,

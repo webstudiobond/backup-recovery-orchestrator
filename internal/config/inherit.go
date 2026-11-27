@@ -212,35 +212,3 @@ func applyHooksLayer(dst, src *HooksConfig) {
 		dst.PostSnapshot = cloneHookSteps(src.PostSnapshot)
 	}
 }
-
-func cloneHookSteps(steps []HookStep) []HookStep {
-	out := make([]HookStep, len(steps))
-	for i := range steps {
-		out[i] = steps[i]
-		out[i].Command = slices.Clone(steps[i].Command)
-	}
-	return out
-}
-
-func cloneDatabases(dbs []DatabaseConfig) []DatabaseConfig {
-	out := make([]DatabaseConfig, len(dbs))
-	for i := range dbs {
-		out[i] = dbs[i]
-		if dbs[i].Secrets != nil {
-			copied := *dbs[i].Secrets
-			out[i].Secrets = &copied
-		}
-	}
-	return out
-}
-
-func cloneRestoreSteps(steps []RestoreStep) []RestoreStep {
-	out := make([]RestoreStep, len(steps))
-	for i := range steps {
-		out[i] = steps[i]
-		out[i].Services = slices.Clone(steps[i].Services)
-		out[i].Args = slices.Clone(steps[i].Args)
-		out[i].Command = slices.Clone(steps[i].Command)
-	}
-	return out
-}

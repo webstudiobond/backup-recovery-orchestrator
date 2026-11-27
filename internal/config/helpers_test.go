@@ -1,11 +1,22 @@
 package config
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 )
+
+func loadTestBundle(ctx context.Context, t *testing.T, cfgPath string) (Bundle, error) {
+	t.Helper()
+
+	global, err := LoadGlobal(ctx, cfgPath)
+	if err != nil {
+		return Bundle{}, err
+	}
+	return LoadBundle(ctx, cfgPath, &global)
+}
 
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()

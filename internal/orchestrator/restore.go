@@ -13,6 +13,7 @@ import (
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/archive"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/validator"
 )
 
 // Restore mode constants control auxiliary asset deployment strategies for reverse-proxy and host-level files during recovery.
@@ -24,7 +25,6 @@ const (
 // RestoreOptions configures single-stack point-in-time disaster recovery and explicit reverse-proxy/host asset selection.
 type RestoreOptions struct {
 	Out                 io.Writer
-	ReverseProxyStack   *config.StackConfig
 	ArchivePath         string
 	ReverseProxyMode    string
 	HostFilesMode       string
@@ -47,17 +47,20 @@ type restoreExecutionContext struct {
 }
 
 // Restore verifies a single TAR backup container, checks UID/GID safety, and executes declarative restore_steps.
-func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig, opts *RestoreOptions) error {
+func (o *Orchestrator) Restore(ctx context.Context, bundle *validator.Bundle, opts *RestoreOptions) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context canceled before restore: %w", err)
 	}
-	if global == nil {
-		return errors.New("global config must not be nil")
+	if bundle == nil {
+		return errors.New("configuration bundle must not be nil")
 	}
 	if opts == nil || strings.TrimSpace(opts.ArchivePath) == "" {
 		return errors.New("archive path is required for restore")
 	}
 	out := resolveWriter(opts.Out)
+	rawBundle := bundle.Config()
+	global := &rawBundle.Global
+	reverseProxyStack := rawBundle.ReverseProxyStack()
 
 	limits := archive.ContainerLimitsFromGB(global.MaxArchiveGB)
 	manifest, verifyErr := archive.VerifyContainerWithLimits(ctx, opts.ArchivePath, limits)
@@ -82,7 +85,7 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 	if len(steps) == 0 {
 		return errors.New("no restore steps selected after filtering")
 	}
-	if prereqErr := validateReverseProxyRestorePrereqs(steps, reverseProxySel, opts.ReverseProxyStack); prereqErr != nil {
+	if prereqErr := validateReverseProxyRestorePrereqs(steps, reverseProxySel, reverseProxyStack); prereqErr != nil {
 		return prereqErr
 	}
 
@@ -109,7 +112,7 @@ func (o *Orchestrator) Restore(ctx context.Context, global *config.GlobalConfig,
 	rctx := &restoreExecutionContext{
 		manifest:          &manifest,
 		global:            global,
-		reverseProxyStack: opts.ReverseProxyStack,
+		reverseProxyStack: reverseProxyStack,
 		out:               out,
 		unpackDir:         unpackDir,
 		reverseProxySel:   reverseProxySel,
@@ -173,7 +176,7 @@ func (o *Orchestrator) executeRestoreStep(ctx context.Context, rctx *restoreExec
 
 func (o *Orchestrator) executeDataOrInfraStep(ctx context.Context, rctx *restoreExecutionContext, step *config.RestoreStep) (bool, error) {
 	switch step.Action {
-	case "extract_files":
+	case config.RestoreActionExtractFiles:
 		if rctx.manifest.FilesArchive == "" {
 			return true, errors.New("manifest missing files_archive")
 		}
@@ -183,7 +186,7 @@ func (o *Orchestrator) executeDataOrInfraStep(ctx context.Context, rctx *restore
 			return true, fmt.Errorf("extract stack files: %w", err)
 		}
 		return true, nil
-	case "apply_dac":
+	case config.RestoreActionApplyDAC:
 		if len(rctx.manifest.DAC) == 0 {
 			return true, nil
 		}
@@ -191,13 +194,13 @@ func (o *Orchestrator) executeDataOrInfraStep(ctx context.Context, rctx *restore
 			return true, fmt.Errorf("apply stack DAC: %w", err)
 		}
 		return true, nil
-	case "extract_host_files":
+	case config.RestoreActionExtractHostFiles:
 		return true, o.restoreHostFiles(ctx, rctx)
-	case "move_contents":
+	case config.RestoreActionMoveContents:
 		return true, moveStackContents(ctx, rctx.manifest.StackDir, step.From, step.To)
 	case config.RestoreActionDeployReverseProxy:
 		return true, deployReverseProxyWithRollback(ctx, o.Docker, o.DAC, rctx.reverseProxyStack, resolveRestoreWorkDir(rctx.global), rctx.unpackDir, rctx.reverseProxySel)
-	case "db_import":
+	case config.RestoreActionDBImport:
 		return true, o.restoreDatabaseStep(ctx, rctx, step.DatabaseID)
 	default:
 		return false, nil
@@ -206,7 +209,7 @@ func (o *Orchestrator) executeDataOrInfraStep(ctx context.Context, rctx *restore
 
 func (o *Orchestrator) executeComposeLifecycleStep(ctx context.Context, composeFile string, step *config.RestoreStep) (bool, error) {
 	switch step.Action {
-	case "compose_down":
+	case config.RestoreActionComposeDown:
 		if _, err := os.Stat(composeFile); errors.Is(err, os.ErrNotExist) {
 			return true, nil
 		}
@@ -214,23 +217,23 @@ func (o *Orchestrator) executeComposeLifecycleStep(ctx context.Context, composeF
 			return true, fmt.Errorf("compose down: %w", err)
 		}
 		return true, nil
-	case "compose_up":
+	case config.RestoreActionComposeUp:
 		if err := o.Docker.Up(ctx, composeFile, step.Services...); err != nil {
 			return true, fmt.Errorf("compose up: %w", err)
 		}
 		return true, nil
-	case "wait_healthy":
+	case config.RestoreActionWaitHealthy:
 		timeout := time.Duration(step.TimeoutSec) * time.Second
 		if err := o.Docker.WaitHealthy(ctx, composeFile, step.Services, timeout); err != nil {
 			return true, fmt.Errorf("wait healthy: %w", err)
 		}
 		return true, nil
-	case "compose_restart":
+	case config.RestoreActionComposeRestart:
 		if err := o.Docker.Restart(ctx, composeFile, step.Services...); err != nil {
 			return true, fmt.Errorf("compose restart: %w", err)
 		}
 		return true, nil
-	case "compose_exec", "compose_run":
+	case config.RestoreActionComposeExec, config.RestoreActionComposeRun:
 		return true, o.executeComposeRestoreCommand(ctx, composeFile, step)
 	default:
 		return false, nil
@@ -242,7 +245,7 @@ func (o *Orchestrator) executeComposeRestoreCommand(ctx context.Context, compose
 	if len(cmdArgs) == 0 {
 		cmdArgs = step.Args
 	}
-	if step.Action == "compose_exec" {
+	if step.Action == config.RestoreActionComposeExec {
 		if err := o.Docker.Exec(ctx, composeFile, step.Service, nil, cmdArgs, nil, nil); err != nil {
 			return fmt.Errorf("compose exec %s: %w", step.Service, err)
 		}
@@ -259,13 +262,13 @@ func effectiveRestoreSteps(manifest *archive.Manifest) []config.RestoreStep {
 		return manifest.RestoreSteps
 	}
 	return []config.RestoreStep{
-		{Action: "compose_down"},
-		{Action: "extract_files"},
-		{Action: "apply_dac"},
-		{Action: "extract_host_files"},
+		{Action: config.RestoreActionComposeDown},
+		{Action: config.RestoreActionExtractFiles},
+		{Action: config.RestoreActionApplyDAC},
+		{Action: config.RestoreActionExtractHostFiles},
 		{Action: config.RestoreActionDeployReverseProxy},
-		{Action: "compose_up"},
-		{Action: "wait_healthy"},
+		{Action: config.RestoreActionComposeUp},
+		{Action: config.RestoreActionWaitHealthy},
 	}
 }
 

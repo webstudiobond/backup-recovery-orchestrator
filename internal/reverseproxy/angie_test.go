@@ -9,10 +9,10 @@ func TestAngieProvider(t *testing.T) {
 	t.Parallel()
 
 	p := angieProvider{}
-	if p.Type() != TypeAngie {
-		t.Fatalf("expected type %q, got %q", TypeAngie, p.Type())
+	if p.Type() != typeAngie {
+		t.Fatalf("expected type %q, got %q", typeAngie, p.Type())
 	}
-	if !slices.Equal(p.SyntaxCheckArgs(), []string{TypeAngie, "-t"}) {
+	if !slices.Equal(p.SyntaxCheckArgs(), []string{typeAngie, "-t"}) {
 		t.Fatalf("unexpected syntax args: %v", p.SyntaxCheckArgs())
 	}
 

@@ -1,6 +1,7 @@
 package dac
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -25,16 +26,16 @@ func (a *Applier) resolveOwner(ownerSpec string, stackUser config.UserConfig) (u
 		return 0, 0, false, nil
 	}
 
-	parts := strings.Split(ownerSpec, ":")
-	if len(parts) != 2 {
-		return 0, 0, false, fmt.Errorf("invalid owner specification %q", ownerSpec)
+	userSpec, groupSpec, splitErr := splitOwnerSpec(ownerSpec)
+	if splitErr != nil {
+		return 0, 0, false, fmt.Errorf("invalid owner specification %q: %w", ownerSpec, splitErr)
 	}
 
-	resolvedUID, uidErr := a.resolvePrincipal(strings.TrimSpace(parts[0]), stackUser.Name, stackUser.UID, true)
+	resolvedUID, uidErr := a.resolvePrincipal(userSpec, stackUser.Name, stackUser.UID, true)
 	if uidErr != nil {
 		return 0, 0, false, uidErr
 	}
-	resolvedGID, gidErr := a.resolvePrincipal(strings.TrimSpace(parts[1]), stackUser.Name, stackUser.GID, false)
+	resolvedGID, gidErr := a.resolvePrincipal(groupSpec, stackUser.Name, stackUser.GID, false)
 	if gidErr != nil {
 		return 0, 0, false, gidErr
 	}
@@ -78,18 +79,39 @@ func (a *Applier) resolvePrincipal(token, stackName string, stackID uint32, isUs
 	return lookup(token)
 }
 
+func splitOwnerSpec(spec string) (userSpec, groupSpec string, err error) {
+	parts := strings.Split(spec, ":")
+	if len(parts) != 2 {
+		return "", "", errors.New("expected 'user:group'")
+	}
+	userSpec = strings.TrimSpace(parts[0])
+	groupSpec = strings.TrimSpace(parts[1])
+	if userSpec == "" || groupSpec == "" {
+		return "", "", errors.New("expected 'user:group'")
+	}
+	return userSpec, groupSpec, nil
+}
+
+func parseOctalMode(raw string) (os.FileMode, error) {
+	parsed, err := strconv.ParseUint(raw, 8, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parse octal mode: %w", err)
+	}
+	if parsed > 0o7777 {
+		return 0, errors.New("mode exceeds 07777")
+	}
+	return os.FileMode(parsed), nil
+}
+
 func parseOptionalMode(raw string) (mode os.FileMode, set bool, err error) {
 	if strings.TrimSpace(raw) == "" {
 		return 0, false, nil
 	}
-	parsed, parseErr := strconv.ParseUint(raw, 8, 32)
+	parsed, parseErr := parseOctalMode(raw)
 	if parseErr != nil {
 		return 0, false, fmt.Errorf("parse mode %q: %w", raw, parseErr)
 	}
-	if parsed > 0o7777 {
-		return 0, false, fmt.Errorf("mode %q exceeds 07777", raw)
-	}
-	return os.FileMode(parsed), true, nil
+	return parsed, true, nil
 }
 
 func resolveWithinRoot(absRoot, relPath string) (string, error) {

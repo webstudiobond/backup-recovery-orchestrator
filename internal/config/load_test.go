@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -164,7 +166,7 @@ func TestLoadBundleWithProfilesAndOverrides(t *testing.T) {
   }
 }`)
 
-	bundle, err := LoadBundle(context.Background(), globalPath)
+	bundle, err := loadTestBundle(context.Background(), t, globalPath)
 	if err != nil {
 		t.Fatalf("unexpected error loading bundle: %v", err)
 	}
@@ -204,9 +206,12 @@ func TestLoadBundleContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := LoadBundle(ctx, filepath.Join(t.TempDir(), "config.json"))
+	_, err := LoadBundle(ctx, filepath.Join(t.TempDir(), "config.json"), &GlobalConfig{})
 	if err == nil {
 		t.Fatalf("expected error for canceled context, got nil")
+	}
+	if _, nilErr := LoadBundle(context.Background(), "config.json", nil); nilErr == nil {
+		t.Fatalf("expected error for nil global config, got nil")
 	}
 }
 
@@ -411,8 +416,113 @@ func TestLoadBundleWithProfilesError(t *testing.T) {
 		}
 	}`, badProfilesDir))
 
-	if _, err := LoadBundle(context.Background(), cfgPath); err == nil {
+	if _, err := loadTestBundle(context.Background(), t, cfgPath); err == nil {
 		t.Fatalf("expected LoadBundle to fail when profile decoding fails, got nil")
+	}
+}
+
+func TestLoadBundleIntegrityErrors(t *testing.T) {
+	t.Parallel()
+
+	baseGlobal := `{"lvm":{"vg_name":"vg","lv_name":"lv","snapshot_name":"snap","snapshot_size":"5G","mount_point":"/mnt/snap"}}`
+	cases := []struct {
+		profiles    map[string]string
+		extraStacks map[string]string
+		name        string
+		globalJSON  string
+		singleStack string
+		errContains string
+	}{
+		{
+			name:        "unknown field in global config",
+			globalJSON:  `{"unknown_key": true}`,
+			errContains: "unknown field",
+		},
+		{
+			name:        "missing profile",
+			globalJSON:  baseGlobal,
+			singleStack: `{"extends": "does-not-exist"}`,
+			errContains: "not found",
+		},
+		{
+			name:       "cyclic profile inheritance",
+			globalJSON: baseGlobal,
+			profiles: map[string]string{
+				"a.json": `{"extends": "b"}`,
+				"b.json": `{"extends": "a"}`,
+			},
+			singleStack: `{"extends": "a"}`,
+			errContains: "cyclic profile inheritance",
+		},
+		{
+			name:       "duplicate stack name across files",
+			globalJSON: baseGlobal,
+			extraStacks: map[string]string{
+				"one.json": `{"name": "shared"}`,
+				"two.json": `{"name": "shared"}`,
+			},
+			errContains: "duplicate stack name",
+		},
+		{
+			name:        "trailing json payload",
+			globalJSON:  baseGlobal,
+			singleStack: `{"enabled": true}{"extra": true}`,
+			errContains: "unexpected trailing data",
+		},
+		{
+			name:        "vars reserved stack key",
+			globalJSON:  baseGlobal,
+			singleStack: `{"vars": {"stack": "other"}}`,
+			errContains: `vars key "stack" is reserved`,
+		},
+		{
+			name:        "vars absolute value rejected",
+			globalJSON:  baseGlobal,
+			singleStack: `{"vars": {"data_dir": "/etc/evil"}}`,
+			errContains: "must be relative",
+		},
+		{
+			name:        "vars parent traversal rejected",
+			globalJSON:  baseGlobal,
+			singleStack: `{"vars": {"data_dir": "../escape"}}`,
+			errContains: "escapes base path",
+		},
+		{
+			name:        "unresolved placeholder rejected",
+			globalJSON:  baseGlobal,
+			singleStack: `{"files": {"excludes": ["./{missing_dir}/*"]}}`,
+			errContains: "unresolved variable placeholder",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.json")
+			writeTestFile(t, cfgPath, tc.globalJSON)
+
+			for name, body := range tc.profiles {
+				writeTestFile(t, filepath.Join(dir, "profiles", name), body)
+			}
+			if tc.singleStack != "" {
+				writeTestFile(t, filepath.Join(dir, "conf.d", "app.json"), tc.singleStack)
+			}
+			for name, body := range tc.extraStacks {
+				writeTestFile(t, filepath.Join(dir, "conf.d", name), body)
+			}
+			if tc.singleStack == "" && len(tc.extraStacks) == 0 {
+				if err := os.MkdirAll(filepath.Join(dir, "conf.d"), 0o750); err != nil {
+					t.Fatalf("mkdir conf.d: %v", err)
+				}
+			}
+
+			_, err := loadTestBundle(context.Background(), t, cfgPath)
+			if err == nil || !strings.Contains(err.Error(), tc.errContains) {
+				t.Fatalf("expected error containing %q, got %v", tc.errContains, err)
+			}
+		})
 	}
 }
 
@@ -447,27 +557,12 @@ func TestLoadGlobalStandalone(t *testing.T) {
 	if global.MaxArchiveGB != 300 || global.MinFreeGB != DefaultMinFreeGB {
 		t.Fatalf("unexpected global config limits: max_archive_gb=%d min_free_gb=%d", global.MaxArchiveGB, global.MinFreeGB)
 	}
-
-	invalidCfgPath := filepath.Join(dir, "invalid.json")
-	writeTestFile(t, invalidCfgPath, `{
-		"max_archive_gb": 0,
-		"lvm": {
-			"vg_name": "vg_dr",
-			"lv_name": "lv_dr",
-			"snapshot_name": "snap_dr",
-			"snapshot_size": "5G",
-			"mount_point": "/mnt/dr"
-		}
-	}`)
-	if _, err := LoadGlobal(ctx, invalidCfgPath); err == nil {
-		t.Fatal("expected validation error for max_archive_gb=0")
-	}
 }
 
 func TestLoadExampleConfigs(t *testing.T) {
 	t.Parallel()
 
-	bundle, err := LoadBundle(context.Background(), filepath.Join("..", "..", "examples", "etc", "bro", "config.json"))
+	bundle, err := loadTestBundle(context.Background(), t, filepath.Join("..", "..", "examples", "etc", "bro", "config.json"))
 	if err != nil {
 		t.Fatalf("expected example bundle to load cleanly, got: %v", err)
 	}

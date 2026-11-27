@@ -129,7 +129,7 @@ func (m *Manager) CreateSnapshot(ctx context.Context, cfg *config.LVMConfig) err
 	snapDev := fmt.Sprintf("/dev/%s/%s", cfg.VGName, cfg.SnapshotName)
 
 	if err := m.Runner.Run(ctx, &cmdexec.Spec{
-		Name: "lvcreate",
+		Name: cmdexec.BinLVCreate,
 		Args: []string{"--size", cfg.SnapshotSize, "--snapshot", "--name", cfg.SnapshotName, originDev},
 	}); err != nil {
 		return fmt.Errorf("create LVM snapshot %q: %w", snapDev, err)
@@ -141,7 +141,7 @@ func (m *Manager) CreateSnapshot(ctx context.Context, cfg *config.LVMConfig) err
 	}
 
 	if err := m.Runner.Run(ctx, &cmdexec.Spec{
-		Name: "mount",
+		Name: cmdexec.BinMount,
 		Args: []string{"-o", "ro", snapDev, cfg.MountPoint},
 	}); err != nil {
 		cleanErr := m.CleanupSnapshot(ctx, cfg)
@@ -162,11 +162,11 @@ func (m *Manager) CleanupSnapshot(ctx context.Context, cfg *config.LVMConfig) er
 
 	var umountErr error
 	if m.Runner.Run(cleanupCtx, &cmdexec.Spec{
-		Name: "mountpoint",
+		Name: cmdexec.BinMountpoint,
 		Args: []string{"-q", cfg.MountPoint},
 	}) == nil {
 		if err := m.Runner.Run(cleanupCtx, &cmdexec.Spec{
-			Name: "umount",
+			Name: cmdexec.BinUmount,
 			Args: []string{cfg.MountPoint},
 		}); err != nil {
 			umountErr = fmt.Errorf("unmount snapshot %q: %w", cfg.MountPoint, err)
@@ -176,11 +176,11 @@ func (m *Manager) CleanupSnapshot(ctx context.Context, cfg *config.LVMConfig) er
 	snapDev := fmt.Sprintf("/dev/%s/%s", cfg.VGName, cfg.SnapshotName)
 	var lvRemoveErr error
 	if m.Runner.Run(cleanupCtx, &cmdexec.Spec{
-		Name: "lvs",
+		Name: cmdexec.BinLVS,
 		Args: []string{snapDev},
 	}) == nil {
 		if err := m.Runner.Run(cleanupCtx, &cmdexec.Spec{
-			Name: "lvremove",
+			Name: cmdexec.BinLVRemove,
 			Args: []string{"-y", snapDev},
 		}); err != nil {
 			lvRemoveErr = fmt.Errorf("remove LVM snapshot %q: %w", snapDev, err)

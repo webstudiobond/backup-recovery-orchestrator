@@ -8,6 +8,8 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 )
 
+const driverWPCLI = "wp-cli"
+
 func (e *Engine) dumpWPCLI(ctx context.Context, composeFile string, db *config.DatabaseConfig, stdout io.Writer) error {
 	if err := e.Docker.Run(ctx, composeFile, db.Service, nil, []string{"db", "export", "--single-transaction", "--quick", "-"}, nil, stdout); err != nil {
 		return fmt.Errorf("wp-cli export (%s): %w", db.ID, err)

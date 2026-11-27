@@ -1,14 +1,15 @@
-package config
+package dac
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
+
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 )
 
-func validateDACRules(rules []DACRule) error {
+// ValidateRules verifies that every DAC rule targets a stack-relative path and declares valid ownership or mode bits.
+func ValidateRules(rules []config.DACRule) error {
 	for idx := range rules {
 		rule := &rules[idx]
 		if strings.TrimSpace(rule.Path) == "" {
@@ -28,7 +29,8 @@ func validateDACRules(rules []DACRule) error {
 	return nil
 }
 
-func validateHostFiles(items []HostFileConfig) error {
+// ValidateHostFiles verifies unique absolute host file paths, protected location exclusions, and optional DAC attributes.
+func ValidateHostFiles(items []config.HostFileConfig) error {
 	seen := make(map[string]struct{}, len(items))
 	for idx := range items {
 		item := &items[idx]
@@ -67,38 +69,19 @@ func validateDACAttributes(label, owner, dirMode, fileMode string, requireOne bo
 		return fmt.Errorf("%s must specify owner, dir_mode, or file_mode", label)
 	}
 	if owner != "" {
-		if err := validateOwnerSpec(owner); err != nil {
+		if _, _, err := splitOwnerSpec(owner); err != nil {
 			return fmt.Errorf("%s invalid owner %q: %w", label, owner, err)
 		}
 	}
 	if dirMode != "" {
-		if err := validateOctalMode(dirMode); err != nil {
+		if _, err := parseOctalMode(dirMode); err != nil {
 			return fmt.Errorf("%s invalid dir_mode %q: %w", label, dirMode, err)
 		}
 	}
 	if fileMode != "" {
-		if err := validateOctalMode(fileMode); err != nil {
+		if _, err := parseOctalMode(fileMode); err != nil {
 			return fmt.Errorf("%s invalid file_mode %q: %w", label, fileMode, err)
 		}
-	}
-	return nil
-}
-
-func validateOwnerSpec(spec string) error {
-	parts := strings.Split(spec, ":")
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return errors.New("expected 'user:group'")
-	}
-	return nil
-}
-
-func validateOctalMode(mode string) error {
-	parsed, err := strconv.ParseUint(mode, 8, 32)
-	if err != nil {
-		return fmt.Errorf("parse octal mode: %w", err)
-	}
-	if parsed > 0o7777 {
-		return errors.New("mode exceeds 07777")
 	}
 	return nil
 }

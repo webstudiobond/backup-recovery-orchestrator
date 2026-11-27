@@ -1,16 +1,15 @@
 package reverseproxy
 
-// TypeAngie identifies the built-in Angie reverse-proxy provider.
-const TypeAngie = "angie"
+const typeAngie = "angie"
 
 type angieProvider struct{}
 
 func (angieProvider) Type() string {
-	return TypeAngie
+	return typeAngie
 }
 
 func (angieProvider) SyntaxCheckArgs() []string {
-	return []string{TypeAngie, "-t"}
+	return []string{typeAngie, "-t"}
 }
 
 func (angieProvider) DefaultConfDACPolicy(groupName string) DACPolicy {

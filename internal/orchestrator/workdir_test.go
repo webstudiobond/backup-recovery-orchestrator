@@ -545,7 +545,7 @@ func TestPruneBeforeFreeSpaceInSelfBackup(t *testing.T) {
 		}
 		return 1024, nil
 	}
-	if err := orch.SelfBackup(ctx, &bundle, &SelfBackupOptions{NoSync: true, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "check free space") {
+	if err := orch.SelfBackup(ctx, mustValidateBundle(t, &bundle), &SelfBackupOptions{NoSync: true, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "check free space") {
 		t.Fatalf("expected check free space error, got %v", err)
 	}
 
@@ -555,7 +555,7 @@ func TestPruneBeforeFreeSpaceInSelfBackup(t *testing.T) {
 	}
 	badBackupBundle := bundle
 	badBackupBundle.Global.BackupRoot = fileWork
-	if err := orch.Backup(ctx, &badBackupBundle, &BackupOptions{NoSync: true, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "prepare backup work directory") {
+	if err := orch.Backup(ctx, mustValidateBundle(t, &badBackupBundle), &BackupOptions{NoSync: true, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "prepare backup work directory") {
 		t.Fatalf("expected prepare backup work directory error, got %v", err)
 	}
 }
@@ -567,10 +567,11 @@ func TestPruneBeforeFreeSpaceInRestore(t *testing.T) {
 	root := t.TempDir()
 	stackName := "app-prune-restore"
 	bundle := buildTestBundle(t, root, stackName)
+	validated := mustValidateBundle(t, &bundle)
 	pPath, gPath := writeFakeAccounts(t, root, stackName)
 	orch := newTestOrchestrator(&fakeOrchRunner{snapMount: bundle.Global.LVM.MountPoint, stackName: stackName}, pPath, gPath, nil)
 
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
+	if err := orch.Backup(ctx, validated, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
 		t.Fatalf("Backup failed: %v", err)
 	}
 	archivePath := filepath.Join(bundle.Global.BackupRoot, stackName, stackName+"_2026-11-16_15-00-00.tar")
@@ -585,7 +586,7 @@ func TestPruneBeforeFreeSpaceInRestore(t *testing.T) {
 		}
 		return 1024, nil
 	}
-	if err := orch.Restore(ctx, &bundle.Global, &RestoreOptions{ArchivePath: archivePath, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "check free space") {
+	if err := orch.Restore(ctx, validated, &RestoreOptions{ArchivePath: archivePath, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "check free space") {
 		t.Fatalf("expected check free space error in Restore, got %v", err)
 	}
 
@@ -593,15 +594,15 @@ func TestPruneBeforeFreeSpaceInRestore(t *testing.T) {
 	if wErr := os.WriteFile(fileWork, []byte("x"), 0o600); wErr != nil {
 		t.Fatalf("write file_work_dir: %v", wErr)
 	}
-	badRestoreGlobal := bundle.Global
-	badRestoreGlobal.RestoreWorkDir = fileWork
-	if err := orch.Restore(ctx, &badRestoreGlobal, &RestoreOptions{ArchivePath: archivePath, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "prepare restore work directory") {
+	badRestoreBundle := bundle
+	badRestoreBundle.Global.RestoreWorkDir = fileWork
+	if err := orch.Restore(ctx, mustValidateBundle(t, &badRestoreBundle), &RestoreOptions{ArchivePath: archivePath, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "prepare restore work directory") {
 		t.Fatalf("expected prepare restore work directory error, got %v", err)
 	}
 
-	overlapGlobal := bundle.Global
-	overlapGlobal.RestoreWorkDir = filepath.Join(bundle.Stacks[0].StackDir, ".bro-work")
-	if err := orch.Restore(ctx, &overlapGlobal, &RestoreOptions{ArchivePath: archivePath, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "must not overlap stack_dir") {
+	overlapBundle := bundle
+	overlapBundle.Global.RestoreWorkDir = filepath.Join(bundle.Stacks[0].StackDir, ".bro-work")
+	if err := orch.Restore(ctx, mustValidateBundle(t, &overlapBundle), &RestoreOptions{ArchivePath: archivePath, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "must not overlap stack_dir") {
 		t.Fatalf("expected overlapping restore_work_dir error, got %v", err)
 	}
 }

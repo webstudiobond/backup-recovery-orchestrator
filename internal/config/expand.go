@@ -1,8 +1,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
+
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/identifier"
 )
 
 func expandStackVars(out *StackConfig) error {
@@ -95,4 +99,37 @@ func expandVarField(replacer *strings.Replacer, raw, field string) (string, erro
 func hasUnresolvedPlaceholder(value string) bool {
 	_, after, ok := strings.Cut(value, "{")
 	return ok && strings.Contains(after, "}")
+}
+
+func validateStackVars(vars map[string]string) error {
+	for key, val := range vars {
+		if err := identifier.Validate(key, "vars key"); err != nil {
+			return fmt.Errorf("validate vars key %q: %w", key, err)
+		}
+		if key == "stack" {
+			return errors.New("vars key \"stack\" is reserved")
+		}
+		if err := validateVarValue(key, val); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateVarValue(key, val string) error {
+	trimmed := strings.TrimSpace(val)
+	if trimmed == "" || trimmed != val {
+		return fmt.Errorf("vars[%q] must be non-empty without surrounding whitespace", key)
+	}
+	if strings.ContainsAny(val, "{}\r\n\t") {
+		return fmt.Errorf("vars[%q] value %q contains forbidden characters", key, val)
+	}
+	if filepath.IsAbs(val) {
+		return fmt.Errorf("vars[%q] value %q must be relative", key, val)
+	}
+	cleaned := filepath.Clean(val)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("vars[%q] value %q escapes base path", key, val)
+	}
+	return nil
 }

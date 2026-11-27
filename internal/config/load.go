@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/identifier"
 )
 
 type globalConfigJSON struct {
@@ -29,29 +31,23 @@ type globalConfigJSON struct {
 	Destinations      []DestinationConfig `json:"destinations"`
 }
 
-// LoadGlobal reads and validates only the global orchestrator configuration without loading profiles or stacks.
+// LoadGlobal reads only the global orchestrator configuration, applying defaults and path cleaning.
 func LoadGlobal(ctx context.Context, configPath string) (GlobalConfig, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return GlobalConfig{}, fmt.Errorf("context canceled before loading config: %w", ctxErr)
 	}
 
 	cleanConfigPath := filepath.Clean(configPath)
-	global, err := loadGlobalConfig(cleanConfigPath)
-	if err != nil {
-		return GlobalConfig{}, err
-	}
-
-	if valErr := validateGlobalConfig(&global); valErr != nil {
-		return GlobalConfig{}, fmt.Errorf("invalid global config %q: %w", cleanConfigPath, valErr)
-	}
-	return global, nil
+	return loadGlobalConfig(cleanConfigPath)
 }
 
-// LoadBundle reads the global config, resolves profile inheritance for every conf.d file, and validates the result.
-func LoadBundle(ctx context.Context, configPath string) (Bundle, error) {
-	global, err := LoadGlobal(ctx, configPath)
-	if err != nil {
-		return Bundle{}, err
+// LoadBundle resolves profile inheritance for every conf.d file using an already loaded global configuration.
+func LoadBundle(ctx context.Context, configPath string, global *GlobalConfig) (Bundle, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return Bundle{}, fmt.Errorf("context canceled before loading bundle: %w", ctxErr)
+	}
+	if global == nil {
+		return Bundle{}, errors.New("global config must not be nil")
 	}
 
 	profiles, profErr := loadProfiles(global.ProfilesDir)
@@ -59,14 +55,14 @@ func LoadBundle(ctx context.Context, configPath string) (Bundle, error) {
 		return Bundle{}, profErr
 	}
 
-	stacks, stackErr := loadStacks(&global, profiles)
+	stacks, stackErr := loadStacks(global, profiles)
 	if stackErr != nil {
 		return Bundle{}, stackErr
 	}
 
 	return Bundle{
 		ConfigDir: resolveConfigDir(filepath.Clean(configPath)),
-		Global:    global,
+		Global:    *global,
 		Stacks:    stacks,
 	}, nil
 }
@@ -213,11 +209,6 @@ func loadStacks(global *GlobalConfig, profiles map[string]StackLayer) ([]StackCo
 		return nil, fmt.Errorf("read conf_dir %q: %w", global.ConfDir, err)
 	}
 
-	knownDests := make(map[string]struct{}, len(global.Destinations))
-	for i := range global.Destinations {
-		knownDests[global.Destinations[i].Name] = struct{}{}
-	}
-
 	seenNames := make(map[string]struct{})
 	var stacks []StackConfig
 
@@ -226,8 +217,8 @@ func loadStacks(global *GlobalConfig, profiles map[string]StackLayer) ([]StackCo
 			continue
 		}
 		stackName := strings.TrimSuffix(entry.Name(), ".json")
-		if err := validateIdentifier(stackName, "stack name from file "+entry.Name()); err != nil {
-			return nil, err
+		if err := identifier.Validate(stackName, "stack name from file "+entry.Name()); err != nil {
+			return nil, fmt.Errorf("validate stack filename %q: %w", entry.Name(), err)
 		}
 
 		filePath := filepath.Join(global.ConfDir, entry.Name())
@@ -249,20 +240,12 @@ func loadStacks(global *GlobalConfig, profiles map[string]StackLayer) ([]StackCo
 		}
 		seenNames[resolved.Name] = struct{}{}
 
-		if valErr := validateStackConfig(&resolved, knownDests); valErr != nil {
-			return nil, fmt.Errorf("validate stack %q: %w", stackName, valErr)
-		}
-
 		stacks = append(stacks, resolved)
 	}
 
 	slices.SortFunc(stacks, func(a, b StackConfig) int {
 		return strings.Compare(a.Name, b.Name)
 	})
-
-	if err := validateBundleReverseProxy(global, stacks); err != nil {
-		return nil, err
-	}
 
 	return stacks, nil
 }

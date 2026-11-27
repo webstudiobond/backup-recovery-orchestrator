@@ -114,7 +114,7 @@ func (e *Engine) streamDecompressTar(ctx context.Context, tarZstPath string, max
 	zstdDone := make(chan error, 1)
 	go func() {
 		zstdErr := e.Runner.Run(streamCtx, &cmdexec.Spec{
-			Name:   "zstd",
+			Name:   cmdexec.BinZstd,
 			Args:   []string{"-dc"},
 			Stdin:  inFile,
 			Stdout: pw,

@@ -53,7 +53,7 @@ func TestProfileVarsExpansion(t *testing.T) {
   }
 }`)
 
-	bundle, err := LoadBundle(context.Background(), cfgPath)
+	bundle, err := loadTestBundle(context.Background(), t, cfgPath)
 	if err != nil {
 		t.Fatalf("LoadBundle failed: %v", err)
 	}
@@ -183,6 +183,36 @@ func TestExpandStackVarsErrors(t *testing.T) {
 			err := expandStackVars(tc.stack)
 			if err == nil || !strings.Contains(err.Error(), tc.errContains) {
 				t.Fatalf("expected error containing %q, got %v", tc.errContains, err)
+			}
+		})
+	}
+}
+
+func TestValidateVarValue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		val     string
+		wantErr bool
+	}{
+		{name: "whitespace only value", val: "   ", wantErr: true},
+		{name: "surrounding whitespace in value", val: " untrimmed ", wantErr: true},
+		{name: "curly bracket character in value", val: "val{bracket}", wantErr: true},
+		{name: "newline control character in value", val: "val\nline", wantErr: true},
+		{name: "current directory dot value", val: ".", wantErr: true},
+		{name: "parent directory double dot value", val: "..", wantErr: true},
+		{name: "relative path traversal escaping base", val: "../escaped_dir", wantErr: true},
+		{name: "absolute path value", val: "/var/data", wantErr: true},
+		{name: "valid nested relative value", val: "sub/dir-data_01", wantErr: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateVarValue("custom_var_key", tc.val)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateVarValue(%q) error = %v, wantErr = %v", tc.val, err, tc.wantErr)
 			}
 		})
 	}

@@ -23,8 +23,6 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/sysuser"
 )
 
-const archiveTimestampLayout = "2006-01-02_15-04-05"
-
 // Orchestrator ties together LVM, Docker, databases, hooks, archival, DAC, sysuser, and offsite storage.
 type Orchestrator struct {
 	Docker     *docker.Client

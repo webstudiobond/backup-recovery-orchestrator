@@ -114,7 +114,7 @@ func (c *Client) runCompose(ctx context.Context, composeFile string, subArgs []s
 		return err
 	}
 	if runErr := c.Runner.Run(ctx, &cmdexec.Spec{
-		Name:   "docker",
+		Name:   cmdexec.BinDocker,
 		Args:   args,
 		Stdin:  stdin,
 		Stdout: stdout,

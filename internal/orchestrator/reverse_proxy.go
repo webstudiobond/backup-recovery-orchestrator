@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -163,21 +162,6 @@ func applySelectedReverseProxyFiles(
 	return nil
 }
 
-func sanitizeReverseProxyRelativeDir(raw, field string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", fmt.Errorf("reverse_proxy_provider.%s is required", field)
-	}
-	if strings.Contains(trimmed, "\x00") || filepath.IsAbs(trimmed) || !filepath.IsLocal(filepath.FromSlash(trimmed)) {
-		return "", fmt.Errorf("reverse_proxy_provider.%s %q must stay inside stack_dir", field, raw)
-	}
-	cleaned := path.Clean(filepath.ToSlash(trimmed))
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-		return "", fmt.Errorf("reverse_proxy_provider.%s %q must stay inside stack_dir", field, raw)
-	}
-	return cleaned, nil
-}
-
 func applyReverseProxyParentDirDAC(
 	ctx context.Context,
 	dacApplier *dac.Applier,
@@ -211,9 +195,9 @@ func deployReverseProxyConfFiles(
 	confs []string,
 	rollbackEntries *[]reverseProxyRollbackEntry,
 ) error {
-	cleanRelDir, relErr := sanitizeReverseProxyRelativeDir(targetRelDir, dirField)
+	cleanRelDir, relErr := reverseproxy.CleanRelativeDir(targetRelDir, "reverse_proxy_provider."+dirField, true)
 	if relErr != nil {
-		return relErr
+		return fmt.Errorf("validate reverse-proxy %s dir: %w", kind, relErr)
 	}
 	dirRoot, rootErr := openStackDirNoSymlink(reverseProxyRoot, cleanRelDir, true)
 	if rootErr != nil {
@@ -259,9 +243,9 @@ func deployReverseProxyCerts(
 	certs []string,
 	rollbackEntries *[]reverseProxyRollbackEntry,
 ) error {
-	cleanCertsRel, relErr := sanitizeReverseProxyRelativeDir(certsRelDir, "certs_dir")
+	cleanCertsRel, relErr := reverseproxy.CleanRelativeDir(certsRelDir, "reverse_proxy_provider.certs_dir", true)
 	if relErr != nil {
-		return relErr
+		return fmt.Errorf("validate reverse-proxy certs dir: %w", relErr)
 	}
 	certsRoot, rootErr := openStackDirNoSymlink(reverseProxyRoot, cleanCertsRel, true)
 	if rootErr != nil {

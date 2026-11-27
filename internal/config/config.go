@@ -1,4 +1,4 @@
-// Package config loads, resolves, and validates global, profile, and per-stack orchestrator configurations.
+// Package config loads and resolves global, profile, and per-stack orchestrator configurations.
 package config
 
 // Default configuration paths and fallback limits applied when optional fields are omitted.
@@ -15,7 +15,19 @@ const (
 	DefaultHomeBaseDir              = "/home"
 	DefaultComposeName              = "docker-compose.yaml"
 	ReservedSelfBackupName          = "bro-self"
+	ArchiveTimestampLayout          = "2006-01-02_15-04-05"
+	RestoreActionComposeDown        = "compose_down"
+	RestoreActionExtractFiles       = "extract_files"
+	RestoreActionApplyDAC           = "apply_dac"
+	RestoreActionExtractHostFiles   = "extract_host_files"
+	RestoreActionMoveContents       = "move_contents"
+	RestoreActionDBImport           = "db_import"
 	RestoreActionDeployReverseProxy = "deploy_reverse_proxy"
+	RestoreActionComposeUp          = "compose_up"
+	RestoreActionWaitHealthy        = "wait_healthy"
+	RestoreActionComposeRestart     = "compose_restart"
+	RestoreActionComposeExec        = "compose_exec"
+	RestoreActionComposeRun         = "compose_run"
 
 	DefaultTimezone = TimezoneLocal
 	TimezoneLocal   = "local"
@@ -217,7 +229,7 @@ type StackLayer struct {
 	RestoreSteps         []RestoreStep               `json:"restore_steps"`
 }
 
-// StackConfig is the fully resolved, validated effective configuration for a single stack.
+// StackConfig is the resolved effective configuration for a single stack.
 type StackConfig struct {
 	Vars                 map[string]string           `json:"vars,omitempty"`
 	ReverseProxyProvider *ReverseProxyProviderConfig `json:"reverse_proxy_provider,omitempty"`
@@ -281,4 +293,9 @@ func (s *StackConfig) RemoteCountFor(dest *DestinationConfig) int {
 		}
 	}
 	return s.Retention.RemoteCount
+}
+
+// HasReverseProxyBlock reports whether the stack configuration explicitly declared a reverse_proxy object.
+func (s *StackConfig) HasReverseProxyBlock() bool {
+	return s.hasReverseProxyBlock
 }

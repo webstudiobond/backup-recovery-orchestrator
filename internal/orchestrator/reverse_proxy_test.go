@@ -13,7 +13,6 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/dac"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/docker"
-	"github.com/webstudiobond/backup-recovery-orchestrator/internal/reverseproxy"
 )
 
 func recordingReverseProxyDACApplier(owners map[string][2]int) *dac.Applier {
@@ -67,16 +66,16 @@ func TestRestoreReverseProxyRollbackOnInvalidConfig(t *testing.T) {
 	owners := make(map[string][2]int)
 	orch.DAC = recordingReverseProxyDACApplier(owners)
 
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
+	if err := orch.Backup(ctx, mustValidateBundle(t, &bundle), &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
 		t.Fatalf("Backup failed: %v", err)
 	}
 
-	reverseProxyStack := bundle.ReverseProxyStack()
-	reverseProxyStack.User = config.UserConfig{Name: "reverseproxy", UID: 1005, GID: 1005}
-	reverseProxyStack.DAC = []config.DACRule{
+	bundle.Stacks[1].User = config.UserConfig{Name: "reverseproxy", UID: 1005, GID: 1005}
+	bundle.Stacks[1].DAC = []config.DACRule{
 		{Path: "data/conf.d", Owner: "root:reverseproxy", DirMode: "0750", FileMode: "0640", Recursive: true},
 		{Path: "data/tls-certs", Owner: "stack:stack", DirMode: "0750", FileMode: "0640", Recursive: true},
 	}
+	reverseProxyStack := bundle.ReverseProxyStack()
 
 	domainPath := filepath.Join(reverseProxyStack.StackDir, reverseProxyStack.ReverseProxyProvider.DomainsDir, "alpha.example.com.conf")
 	if err := os.WriteFile(domainPath, []byte("live-good-config"), 0o600); err != nil {
@@ -95,12 +94,11 @@ func TestRestoreReverseProxyRollbackOnInvalidConfig(t *testing.T) {
 	clear(owners)
 	runner.failMatch = "angie -t"
 	archivePath := filepath.Join(bundle.Global.BackupRoot, stackName, stackName+"_2026-11-16_15-00-00.tar")
-	err := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
-		ArchivePath:       archivePath,
-		ReverseProxyStack: reverseProxyStack,
-		ReverseProxyMode:  RestoreModeAll,
-		OnlySteps:         []string{"deploy_reverse_proxy"},
-		Out:               io.Discard,
+	err := orch.Restore(ctx, mustValidateBundle(t, &bundle), &RestoreOptions{
+		ArchivePath:      archivePath,
+		ReverseProxyMode: RestoreModeAll,
+		OnlySteps:        []string{config.RestoreActionDeployReverseProxy},
+		Out:              io.Discard,
 	})
 	if err == nil || !strings.Contains(err.Error(), "angie -t") {
 		t.Fatalf("expected angie -t error, got %v", err)
@@ -233,12 +231,7 @@ func TestDeployReverseProxyWithRollback(t *testing.T) {
 		t.Fatalf("write conf: %v", err)
 	}
 
-	validProvider := &config.ReverseProxyProviderConfig{
-		Type:        reverseproxy.TypeAngie,
-		ServiceName: "reverse-proxy-edge",
-		DomainsDir:  "vhosts",
-		CertsDir:    "tls",
-	}
+	validProvider := newTestReverseProxyProvider("reverse-proxy-edge", "vhosts", "", "tls")
 
 	runner := &fakeOrchRunner{}
 	dockerClient := &docker.Client{Runner: runner}
@@ -311,14 +304,9 @@ func TestDeployReverseProxyWithRollbackTempDirError(t *testing.T) {
 	}
 
 	reverseProxyStack := &config.StackConfig{
-		StackDir:    reverseProxyDir,
-		ComposeFile: composeFile,
-		ReverseProxyProvider: &config.ReverseProxyProviderConfig{
-			Type:        reverseproxy.TypeAngie,
-			ServiceName: "reverse-proxy-rb-err",
-			DomainsDir:  "reverse-proxy-domains",
-			CertsDir:    "reverse-proxy-certs",
-		},
+		StackDir:             reverseProxyDir,
+		ComposeFile:          composeFile,
+		ReverseProxyProvider: newTestReverseProxyProvider("reverse-proxy-rb-err", "reverse-proxy-domains", "", "reverse-proxy-certs"),
 	}
 	sel := reverseProxySelection{Domains: []string{"test.example.com.conf"}}
 	if err := deployReverseProxyWithRollback(context.Background(), nil, nil, reverseProxyStack, fakeDir, t.TempDir(), sel); err == nil || !strings.Contains(err.Error(), "create reverse-proxy rollback directory") {
@@ -357,12 +345,12 @@ func TestApplySelectedReverseProxyFilesValidation(t *testing.T) {
 		wantErr string
 		sel     reverseProxySelection
 	}{
-		{name: "missing domains_dir", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-a"}, sel: reverseProxySelection{Domains: []string{"app1.example.com.conf"}}, wantErr: "reverse_proxy_provider.domains_dir is required"},
-		{name: "absolute domains_dir rejected", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-b", DomainsDir: "/etc/domains"}, sel: reverseProxySelection{Domains: []string{"app2.example.com.conf"}}, wantErr: "must stay inside stack_dir"},
-		{name: "dot domains_dir rejected", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-c", DomainsDir: "."}, sel: reverseProxySelection{Domains: []string{"app3.example.com.conf"}}, wantErr: "must stay inside stack_dir"},
+		{name: "missing domains_dir", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-a"}, sel: reverseProxySelection{Domains: []string{"app1.example.com.conf"}}, wantErr: "reverse_proxy_provider.domains_dir must not be empty"},
+		{name: "absolute domains_dir rejected", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-b", DomainsDir: "/etc/domains"}, sel: reverseProxySelection{Domains: []string{"app2.example.com.conf"}}, wantErr: "must be a relative path inside stack_dir"},
+		{name: "dot domains_dir rejected", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-c", DomainsDir: "."}, sel: reverseProxySelection{Domains: []string{"app3.example.com.conf"}}, wantErr: "must stay within stack_dir"},
 		{name: "ensure domain dir error", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-d", DomainsDir: "file_blocker/sub"}, sel: reverseProxySelection{Domains: []string{"app4.example.com.conf"}}, wantErr: "ensure reverse-proxy domain dir"},
-		{name: "missing stream_dir", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-e"}, sel: reverseProxySelection{Streams: []string{"app5.example.com.inc"}}, wantErr: "reverse_proxy_provider.stream_dir is required"},
-		{name: "missing certs_dir", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-f"}, sel: reverseProxySelection{Certs: []string{"cert1"}}, wantErr: "reverse_proxy_provider.certs_dir is required"},
+		{name: "missing stream_dir", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-e"}, sel: reverseProxySelection{Streams: []string{"app5.example.com.inc"}}, wantErr: "reverse_proxy_provider.stream_dir must not be empty"},
+		{name: "missing certs_dir", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-f"}, sel: reverseProxySelection{Certs: []string{"cert1"}}, wantErr: "reverse_proxy_provider.certs_dir must not be empty"},
 		{name: "ensure certs dir error", provCfg: &config.ReverseProxyProviderConfig{ServiceName: "svc-g", CertsDir: "file_blocker/sub"}, sel: reverseProxySelection{Certs: []string{"cert2"}}, wantErr: "ensure reverse-proxy certs dir"},
 	}
 
@@ -397,13 +385,8 @@ func TestDeployReverseProxyConfFilesErrors(t *testing.T) {
 
 	provider := mustLookupReverseProxyProvider(t)
 	reverseProxyStack := &config.StackConfig{
-		StackDir: reverseProxyDir,
-		ReverseProxyProvider: &config.ReverseProxyProviderConfig{
-			Type:        reverseproxy.TypeAngie,
-			ServiceName: "gw-conf",
-			DomainsDir:  "sites",
-			CertsDir:    "pki",
-		},
+		StackDir:             reverseProxyDir,
+		ReverseProxyProvider: newTestReverseProxyProvider("gw-conf", "sites", "", "pki"),
 	}
 	var entries []reverseProxyRollbackEntry
 	reverseProxyUser := config.UserConfig{Name: "gw-conf"}
@@ -454,13 +437,8 @@ func TestDeployReverseProxyCertsErrors(t *testing.T) {
 
 	provider := mustLookupReverseProxyProvider(t)
 	reverseProxyStack := &config.StackConfig{
-		StackDir: reverseProxyDir,
-		ReverseProxyProvider: &config.ReverseProxyProviderConfig{
-			Type:        reverseproxy.TypeAngie,
-			ServiceName: "gw-cert",
-			DomainsDir:  "sites",
-			CertsDir:    "pki",
-		},
+		StackDir:             reverseProxyDir,
+		ReverseProxyProvider: newTestReverseProxyProvider("gw-cert", "sites", "", "pki"),
 	}
 	var entries []reverseProxyRollbackEntry
 	reverseProxyUser := config.UserConfig{Name: "gw-cert"}

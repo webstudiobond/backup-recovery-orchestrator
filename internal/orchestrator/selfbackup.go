@@ -14,6 +14,7 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/archive"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/storage"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/validator"
 )
 
 const (
@@ -30,7 +31,7 @@ type SelfBackupOptions struct {
 }
 
 // SelfBackup archives bro configuration and bro-related systemd units into a reference-only container.
-func (o *Orchestrator) SelfBackup(ctx context.Context, bundle *config.Bundle, opts *SelfBackupOptions) error {
+func (o *Orchestrator) SelfBackup(ctx context.Context, bundle *validator.Bundle, opts *SelfBackupOptions) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context canceled before selfbackup: %w", err)
 	}
@@ -41,20 +42,21 @@ func (o *Orchestrator) SelfBackup(ctx context.Context, bundle *config.Bundle, op
 		opts = &SelfBackupOptions{}
 	}
 	out := resolveWriter(opts.Out)
+	rawBundle := bundle.Config()
 
-	items, err := o.collectSelfBackupItems(bundle)
+	items, err := o.collectSelfBackupItems(rawBundle)
 	if err != nil {
 		return err
 	}
 	if opts.DryRun {
-		printSelfBackupDryRun(out, bundle, items, opts.NoSync)
+		printSelfBackupDryRun(out, rawBundle, items, opts.NoSync)
 		return nil
 	}
 
-	if err := pruneStaleWorkDirs(backupWorkDir(bundle.Global.BackupRoot)); err != nil {
+	if err := pruneStaleWorkDirs(backupWorkDir(rawBundle.Global.BackupRoot)); err != nil {
 		return fmt.Errorf("prepare selfbackup work directory: %w", err)
 	}
-	if err := o.LVM.CheckFreeSpace(ctx, bundle.Global.BackupRoot, bundle.Global.MinFreeGB); err != nil {
+	if err := o.LVM.CheckFreeSpace(ctx, rawBundle.Global.BackupRoot, rawBundle.Global.MinFreeGB); err != nil {
 		return fmt.Errorf("check free space: %w", err)
 	}
 
@@ -62,8 +64,8 @@ func (o *Orchestrator) SelfBackup(ctx context.Context, bundle *config.Bundle, op
 	if nowFn == nil {
 		nowFn = defaultOrchestratorNow
 	}
-	backupNow, stamp := resolveBackupTime(nowFn(), bundle.Global.Timezone)
-	targetTarPath, localDir, packErr := o.buildSelfBackupContainer(ctx, &bundle.Global, items, backupNow, stamp)
+	backupNow, stamp := resolveBackupTime(nowFn(), rawBundle.Global.Timezone)
+	targetTarPath, localDir, packErr := o.buildSelfBackupContainer(ctx, &rawBundle.Global, items, backupNow, stamp)
 	if packErr != nil {
 		return packErr
 	}
@@ -72,8 +74,8 @@ func (o *Orchestrator) SelfBackup(ctx context.Context, bundle *config.Bundle, op
 
 	var syncErrs []error
 	if !opts.NoSync {
-		for dIdx := range bundle.Global.Destinations {
-			dest := &bundle.Global.Destinations[dIdx]
+		for dIdx := range rawBundle.Global.Destinations {
+			dest := &rawBundle.Global.Destinations[dIdx]
 			if syncErr := o.syncSingleArchiveToDest(ctx, out, dest, config.ReservedSelfBackupName, targetTarPath, selfBackupRemoteKeep); syncErr != nil {
 				syncErrs = append(syncErrs, syncErr)
 			}

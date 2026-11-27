@@ -27,6 +27,7 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/reverseproxy"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/storage"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/sysuser"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/validator"
 )
 
 type orchCall struct {
@@ -214,19 +215,24 @@ func buildTestBundle(t *testing.T, root, stackName string) config.Bundle {
 		t.Fatalf("write stream conf: %v", err)
 	}
 
+	baseLVM := config.LVMConfig{
+		VGName:       "ubuntu-vg",
+		LVName:       "lv_home",
+		SnapshotName: "home_snap",
+		SnapshotSize: "35G",
+		MountPoint:   filepath.Join(root, "mnt", "home_snap"),
+	}
+
 	return config.Bundle{
 		ConfigDir: cfgDir,
 		Global: config.GlobalConfig{
-			BackupRoot: filepath.Join(root, "backups"),
-			MinFreeGB:  10,
-			ZstdLevel:  6,
-			LVM: config.LVMConfig{
-				VGName:       "ubuntu-vg",
-				LVName:       "lv_home",
-				SnapshotName: "home_snap",
-				SnapshotSize: "35G",
-				MountPoint:   filepath.Join(root, "mnt", "home_snap"),
-			},
+			BackupRoot:        filepath.Join(root, "backups"),
+			LockFile:          filepath.Join(root, "bro.lock"),
+			MaxArchiveGB:      config.DefaultMaxArchiveGB,
+			MinFreeGB:         10,
+			ZstdLevel:         6,
+			Timezone:          config.TimezoneLocal,
+			LVM:               baseLVM,
 			ReverseProxyStack: "edge-proxy",
 			Retention:         config.RetentionConfig{LocalCount: 1, RemoteCount: 5},
 			Destinations: []config.DestinationConfig{
@@ -247,16 +253,10 @@ func buildTestBundle(t *testing.T, root, stackName string) config.Bundle {
 				StackDir:    stackDir,
 				ComposeFile: composeFile,
 				User:        config.UserConfig{Name: stackName, UID: 1010, GID: 1010},
-				LVM: config.LVMConfig{
-					VGName:       "ubuntu-vg",
-					LVName:       "lv_home",
-					SnapshotName: "home_snap",
-					SnapshotSize: "35G",
-					MountPoint:   filepath.Join(root, "mnt", "home_snap"),
-				},
-				MinFreeGB: 10,
-				ZstdLevel: 1,
-				Retention: config.RetentionConfig{LocalCount: 1, RemoteCount: 5},
+				LVM:         baseLVM,
+				MinFreeGB:   10,
+				ZstdLevel:   1,
+				Retention:   config.RetentionConfig{LocalCount: 1, RemoteCount: 5},
 				DAC: []config.DACRule{
 					{Path: "docker-compose.yaml", Owner: "root:root", FileMode: "0600"},
 				},
@@ -272,32 +272,39 @@ func buildTestBundle(t *testing.T, root, stackName string) config.Bundle {
 					StreamConfs: []string{"turn.example.com.inc"},
 				},
 				RestoreSteps: []config.RestoreStep{
-					{Action: "compose_down"},
-					{Action: "extract_files"},
-					{Action: "apply_dac"},
-					{Action: "extract_host_files"},
-					{Action: "deploy_reverse_proxy"},
-					{Action: "compose_up", Services: []string{"pg"}},
-					{Action: "wait_healthy", Services: []string{"pg"}},
-					{Action: "db_import"},
+					{Action: config.RestoreActionComposeDown},
+					{Action: config.RestoreActionExtractFiles},
+					{Action: config.RestoreActionApplyDAC},
+					{Action: config.RestoreActionExtractHostFiles},
+					{Action: config.RestoreActionDeployReverseProxy},
+					{Action: config.RestoreActionComposeUp, Services: []string{"pg"}},
+					{Action: config.RestoreActionWaitHealthy, Services: []string{"pg"}},
+					{Action: config.RestoreActionDBImport},
 				},
 			},
 			{
-				Name:        "edge-proxy",
-				Enabled:     false,
-				StackDir:    reverseProxyDir,
-				ComposeFile: reverseProxyCompose,
-				User:        config.UserConfig{Name: "proxyuser", UID: 1001, GID: 1001},
-				ReverseProxyProvider: &config.ReverseProxyProviderConfig{
-					Type:        reverseproxy.TypeAngie,
-					ServiceName: "proxyedge",
-					CertsDir:    "data/tls-certs",
-					DomainsDir:  "data/conf.d/domains",
-					StreamDir:   "data/conf.d/stream",
-				},
+				Name:                 "edge-proxy",
+				Enabled:              false,
+				StackDir:             reverseProxyDir,
+				ComposeFile:          reverseProxyCompose,
+				User:                 config.UserConfig{Name: "proxyuser", UID: 1001, GID: 1001},
+				LVM:                  baseLVM,
+				ZstdLevel:            6,
+				Retention:            config.RetentionConfig{LocalCount: 1, RemoteCount: 5},
+				ReverseProxyProvider: newTestReverseProxyProvider("proxyedge", "data/conf.d/domains", "data/conf.d/stream", "data/tls-certs"),
 			},
 		},
 	}
+}
+
+func mustValidateBundle(t *testing.T, raw *config.Bundle) *validator.Bundle {
+	t.Helper()
+
+	validated, err := validator.ValidateBundle(raw)
+	if err != nil {
+		t.Fatalf("validator.ValidateBundle failed: %v", err)
+	}
+	return validated
 }
 
 func writeFakeAccounts(t *testing.T, root, stackName string) (pPath, gPath string) {
@@ -432,12 +439,26 @@ func (f fakeDirEntry) IsDir() bool                { return f.isDir }
 func (f fakeDirEntry) Type() fs.FileMode          { return 0 }
 func (f fakeDirEntry) Info() (fs.FileInfo, error) { return nil, f.infoErr }
 
+func newTestReverseProxyProvider(serviceName, domainsDir, streamDir, certsDir string) *config.ReverseProxyProviderConfig {
+	return &config.ReverseProxyProviderConfig{
+		Type:        "angie",
+		ServiceName: serviceName,
+		DomainsDir:  domainsDir,
+		StreamDir:   streamDir,
+		CertsDir:    certsDir,
+	}
+}
+
 func mustLookupReverseProxyProvider(t *testing.T) reverseproxy.Provider {
 	t.Helper()
 
-	p, err := reverseproxy.Lookup(reverseproxy.TypeAngie)
+	supported := reverseproxy.SupportedTypes()
+	if len(supported) == 0 {
+		t.Fatal("expected at least one registered reverse-proxy provider")
+	}
+	p, err := reverseproxy.Lookup(supported[0])
 	if err != nil {
-		t.Fatalf("lookup reverse-proxy provider %q: %v", reverseproxy.TypeAngie, err)
+		t.Fatalf("lookup reverse-proxy provider %q: %v", supported[0], err)
 	}
 	return p
 }

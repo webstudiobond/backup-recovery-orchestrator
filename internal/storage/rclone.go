@@ -164,7 +164,7 @@ func (m *Manager) listRcloneStackFiles(ctx context.Context, dest *config.Destina
 
 func (m *Manager) runRclone(ctx context.Context, rcloneConfig string, args ...string) error {
 	if err := m.Runner.Run(ctx, &cmdexec.Spec{
-		Name: config.DestTypeRclone,
+		Name: cmdexec.BinRclone,
 		Args: rcloneConfigPrefix(rcloneConfig, args...),
 	}); err != nil {
 		return fmt.Errorf("run rclone: %w", err)
@@ -174,7 +174,7 @@ func (m *Manager) runRclone(ctx context.Context, rcloneConfig string, args ...st
 
 func (m *Manager) outputRclone(ctx context.Context, rcloneConfig string, args ...string) ([]byte, error) {
 	out, err := m.Runner.Output(ctx, &cmdexec.Spec{
-		Name: config.DestTypeRclone,
+		Name: cmdexec.BinRclone,
 		Args: rcloneConfigPrefix(rcloneConfig, args...),
 	})
 	if err != nil {

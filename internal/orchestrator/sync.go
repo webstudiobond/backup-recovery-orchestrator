@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/validator"
 )
 
 // SyncOptions controls stack and destination selection for standalone offsite synchronization.
@@ -19,20 +20,24 @@ type SyncOptions struct {
 }
 
 // Sync pushes existing local archives to configured destinations and enforces per-destination retention.
-func (o *Orchestrator) Sync(ctx context.Context, bundle *config.Bundle, opts *SyncOptions) error {
+func (o *Orchestrator) Sync(ctx context.Context, bundle *validator.Bundle, opts *SyncOptions) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context canceled before sync: %w", err)
+	}
+	if bundle == nil {
+		return errors.New("configuration bundle must not be nil")
 	}
 	if opts == nil {
 		opts = &SyncOptions{}
 	}
 	out := resolveWriter(opts.Out)
+	rawBundle := bundle.Config()
 
-	targets, err := selectStacks(bundle, opts.Stacks)
+	targets, err := selectStacks(rawBundle, opts.Stacks)
 	if err != nil {
 		return err
 	}
-	dests, destErr := selectDestinations(bundle.Global.Destinations, opts.Destination)
+	dests, destErr := selectDestinations(rawBundle.Global.Destinations, opts.Destination)
 	if destErr != nil {
 		return destErr
 	}
@@ -41,7 +46,7 @@ func (o *Orchestrator) Sync(ctx context.Context, bundle *config.Bundle, opts *Sy
 	syncAll := len(opts.Stacks) == 0
 	for dIdx := range dests {
 		dest := &dests[dIdx]
-		destErrs := o.syncDestinationStacks(ctx, out, bundle.Global.BackupRoot, dest, targets, opts.Destination != "", syncAll)
+		destErrs := o.syncDestinationStacks(ctx, out, rawBundle.Global.BackupRoot, dest, targets, opts.Destination != "", syncAll)
 		syncErrs = append(syncErrs, destErrs...)
 		if ctx.Err() != nil {
 			break

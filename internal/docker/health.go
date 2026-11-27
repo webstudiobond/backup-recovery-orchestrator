@@ -68,7 +68,7 @@ func (c *Client) checkHealthOnce(ctx context.Context, composeFile string, servic
 	}
 
 	out, outErr := c.Runner.Output(ctx, &cmdexec.Spec{
-		Name: "docker",
+		Name: cmdexec.BinDocker,
 		Args: args,
 	})
 	if outErr != nil {

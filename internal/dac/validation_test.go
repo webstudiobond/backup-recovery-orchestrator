@@ -1,48 +1,50 @@
-package config
+package dac
 
 import (
 	"testing"
+
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 )
 
-func TestValidateDACRules(t *testing.T) {
+func TestValidateRules(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name    string
-		rules   []DACRule
+		rules   []config.DACRule
 		wantErr bool
 	}{
 		{
 			name: "empty rule path rejected",
-			rules: []DACRule{
+			rules: []config.DACRule{
 				{Path: "\t \t", Owner: "app_one:app_one", FileMode: "0644"},
 			},
 			wantErr: true,
 		},
 		{
 			name: "absolute rule path rejected",
-			rules: []DACRule{
+			rules: []config.DACRule{
 				{Path: "/var/www/html", Owner: "app_two:app_two", FileMode: "0644"},
 			},
 			wantErr: true,
 		},
 		{
 			name: "path traversal escaping stack dir",
-			rules: []DACRule{
+			rules: []config.DACRule{
 				{Path: "../outside_tree", Owner: "app_three:app_three", FileMode: "0644"},
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid attribute in dac rule",
-			rules: []DACRule{
+			rules: []config.DACRule{
 				{Path: "data/logs", Owner: "bad_owner_format"},
 			},
 			wantErr: true,
 		},
 		{
 			name: "valid dac rules collection",
-			rules: []DACRule{
+			rules: []config.DACRule{
 				{Path: "data/storage", Owner: "deploy:deploy", DirMode: "0750", FileMode: "0640"},
 			},
 			wantErr: false,
@@ -52,9 +54,9 @@ func TestValidateDACRules(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateDACRules(tc.rules)
+			err := ValidateRules(tc.rules)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateDACRules() error = %v, wantErr = %v", err, tc.wantErr)
+				t.Fatalf("ValidateRules() error = %v, wantErr = %v", err, tc.wantErr)
 			}
 		})
 	}
@@ -65,26 +67,33 @@ func TestValidateHostFiles(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		items   []HostFileConfig
+		items   []config.HostFileConfig
 		wantErr bool
 	}{
 		{
 			name: "relative host file path rejected",
-			items: []HostFileConfig{
-				{Path: "relative/path/file.txt", Owner: "root:root"},
+			items: []config.HostFileConfig{
+				{Path: "relative/path/file.txt", Owner: "sysop:sysop"},
 			},
 			wantErr: true,
 		},
 		{
 			name: "protected system location path rejected",
-			items: []HostFileConfig{
+			items: []config.HostFileConfig{
 				{Path: "/etc/passwd", Owner: "sys:sys"},
 			},
 			wantErr: true,
 		},
 		{
+			name: "protected sudoers dropin rejected",
+			items: []config.HostFileConfig{
+				{Path: "/etc/sudoers.d/custom", Owner: "secops:secops"},
+			},
+			wantErr: true,
+		},
+		{
 			name: "duplicate cleaned path rejected",
-			items: []HostFileConfig{
+			items: []config.HostFileConfig{
 				{Path: "/opt/app/config.ini", Owner: "bin:bin"},
 				{Path: "/opt/app/./config.ini", Owner: "bin:bin"},
 			},
@@ -92,14 +101,14 @@ func TestValidateHostFiles(t *testing.T) {
 		},
 		{
 			name: "invalid dac attributes in host file",
-			items: []HostFileConfig{
+			items: []config.HostFileConfig{
 				{Path: "/opt/app/server.crt", Owner: "invalid_no_colon"},
 			},
 			wantErr: true,
 		},
 		{
 			name: "valid distinct host files",
-			items: []HostFileConfig{
+			items: []config.HostFileConfig{
 				{Path: "/opt/app/conf_a.env", Owner: "infra:infra", FileMode: "0600"},
 				{Path: "/opt/app/conf_b.env", DirMode: "0700"},
 			},
@@ -110,9 +119,9 @@ func TestValidateHostFiles(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateHostFiles(tc.items)
+			err := ValidateHostFiles(tc.items)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateHostFiles() error = %v, wantErr = %v", err, tc.wantErr)
+				t.Fatalf("ValidateHostFiles() error = %v, wantErr = %v", err, tc.wantErr)
 			}
 		})
 	}
@@ -148,7 +157,7 @@ func TestValidateDACAttributes(t *testing.T) {
 		},
 		{
 			name:       "invalid file mode non octal",
-			fileMode:   "0999",
+			fileMode:   "0988",
 			requireOne: true,
 			wantErr:    true,
 		},
@@ -178,7 +187,7 @@ func TestValidateDACAttributes(t *testing.T) {
 	}
 }
 
-func TestValidateOwnerSpec(t *testing.T) {
+func TestSplitOwnerSpec(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -197,15 +206,15 @@ func TestValidateOwnerSpec(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateOwnerSpec(tc.spec)
+			_, _, err := splitOwnerSpec(tc.spec)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateOwnerSpec(%q) error = %v, wantErr = %v", tc.spec, err, tc.wantErr)
+				t.Fatalf("splitOwnerSpec(%q) error = %v, wantErr = %v", tc.spec, err, tc.wantErr)
 			}
 		})
 	}
 }
 
-func TestValidateOctalMode(t *testing.T) {
+func TestParseOctalMode(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -224,9 +233,9 @@ func TestValidateOctalMode(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateOctalMode(tc.mode)
+			_, err := parseOctalMode(tc.mode)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateOctalMode(%q) error = %v, wantErr = %v", tc.mode, err, tc.wantErr)
+				t.Fatalf("parseOctalMode(%q) error = %v, wantErr = %v", tc.mode, err, tc.wantErr)
 			}
 		})
 	}

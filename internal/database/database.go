@@ -151,7 +151,7 @@ func (e *Engine) DumpToFile(ctx context.Context, composeFile string, db *config.
 	go func() {
 		defer wg.Done()
 		zstdErr = e.Runner.Run(ctx, &cmdexec.Spec{
-			Name:   "zstd",
+			Name:   cmdexec.BinZstd,
 			Args:   []string{fmt.Sprintf("-%d", zstdLevel), "-q"},
 			Stdin:  pr,
 			Stdout: outFile,
@@ -221,7 +221,7 @@ func (e *Engine) RestoreFromFileWithLimit(
 	go func() {
 		defer wg.Done()
 		zstdErr = e.Runner.Run(streamCtx, &cmdexec.Spec{
-			Name:   "zstd",
+			Name:   cmdexec.BinZstd,
 			Args:   []string{"-dc"},
 			Stdin:  inFile,
 			Stdout: pw,
@@ -251,30 +251,36 @@ func (e *Engine) RestoreFromFileWithLimit(
 	return errors.Join(zstdErr, importErr, closeFileErr)
 }
 
+const (
+	secretsSourceContainer = "container"
+	secretsSourceHost      = "host"
+)
+
+type dbDriverOps struct {
+	dump    func(*Engine, context.Context, string, *config.DatabaseConfig, io.Writer) error
+	restore func(*Engine, context.Context, string, *config.DatabaseConfig, io.Reader) error
+}
+
+var databaseDrivers = map[string]dbDriverOps{
+	driverPostgres: {dump: (*Engine).dumpPostgres, restore: (*Engine).importPostgres},
+	driverMariaDB:  {dump: (*Engine).dumpMariaDB, restore: (*Engine).importMariaDB},
+	driverWPCLI:    {dump: (*Engine).dumpWPCLI, restore: (*Engine).importWPCLI},
+}
+
 func (e *Engine) dumpStream(ctx context.Context, composeFile string, db *config.DatabaseConfig, stdout io.Writer) error {
-	switch db.Driver {
-	case "postgres":
-		return e.dumpPostgres(ctx, composeFile, db, stdout)
-	case "mariadb":
-		return e.dumpMariaDB(ctx, composeFile, db, stdout)
-	case "wp-cli":
-		return e.dumpWPCLI(ctx, composeFile, db, stdout)
-	default:
+	ops, ok := databaseDrivers[db.Driver]
+	if !ok {
 		return fmt.Errorf("unsupported database driver %q", db.Driver)
 	}
+	return ops.dump(e, ctx, composeFile, db, stdout)
 }
 
 func (e *Engine) importStream(ctx context.Context, composeFile string, db *config.DatabaseConfig, stdin io.Reader) error {
-	switch db.Driver {
-	case "postgres":
-		return e.importPostgres(ctx, composeFile, db, stdin)
-	case "mariadb":
-		return e.importMariaDB(ctx, composeFile, db, stdin)
-	case "wp-cli":
-		return e.importWPCLI(ctx, composeFile, db, stdin)
-	default:
+	ops, ok := databaseDrivers[db.Driver]
+	if !ok {
 		return fmt.Errorf("unsupported database driver %q", db.Driver)
 	}
+	return ops.restore(e, ctx, composeFile, db, stdin)
 }
 
 func (e *Engine) execWithSecrets(
@@ -287,7 +293,7 @@ func (e *Engine) execWithSecrets(
 	stdin io.Reader,
 	stdout io.Writer,
 ) error {
-	if db.Secrets != nil && db.Secrets.Source == "container" {
+	if db.Secrets != nil && db.Secrets.Source == secretsSourceContainer {
 		args := []string{
 			"sh", "-c", containerScript, "_",
 			db.Secrets.UserFile,
@@ -325,7 +331,7 @@ func readHostCreds(db *config.DatabaseConfig) (resolvedCreds, error) {
 		User:     db.DBUser,
 		Database: db.DBName,
 	}
-	if db.Secrets == nil || db.Secrets.Source != "host" {
+	if db.Secrets == nil || db.Secrets.Source != secretsSourceHost {
 		return creds, nil
 	}
 

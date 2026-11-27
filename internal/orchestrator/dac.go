@@ -10,6 +10,7 @@ import (
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/dac"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/validator"
 )
 
 // DACOptions configures standalone DAC enforcement for a single named stack without an archive.
@@ -20,7 +21,7 @@ type DACOptions struct {
 }
 
 // ApplyDAC verifies the host stack user and applies configured DAC and host_files permissions to a live stack directory.
-func (o *Orchestrator) ApplyDAC(ctx context.Context, bundle *config.Bundle, opts *DACOptions) error {
+func (o *Orchestrator) ApplyDAC(ctx context.Context, bundle *validator.Bundle, opts *DACOptions) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context canceled before applying DAC: %w", err)
 	}
@@ -32,7 +33,7 @@ func (o *Orchestrator) ApplyDAC(ctx context.Context, bundle *config.Bundle, opts
 	}
 
 	stackName := strings.TrimSpace(opts.Stack)
-	stack, ok := bundle.StackByName(stackName)
+	stack, ok := bundle.Config().StackByName(stackName)
 	if !ok {
 		return fmt.Errorf("stack %q not found in configuration", stackName)
 	}

@@ -175,3 +175,33 @@ func TestStackReverseProxyHasAssets(t *testing.T) {
 		t.Fatal("expected ACMENames HasAssets() = true")
 	}
 }
+
+func TestStackConfigHasReverseProxyBlock(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		stack StackConfig
+		want  bool
+	}{
+		{
+			name:  "unset reverse_proxy block returns false",
+			stack: StackConfig{Name: "app-no-rp"},
+			want:  false,
+		},
+		{
+			name:  "explicit reverse_proxy block returns true",
+			stack: StackConfig{Name: "app-with-rp", hasReverseProxyBlock: true},
+			want:  true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.stack.HasReverseProxyBlock(); got != tc.want {
+				t.Fatalf("HasReverseProxyBlock() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

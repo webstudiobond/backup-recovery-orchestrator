@@ -13,6 +13,7 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/cmdexec"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/orchestrator"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/validator"
 )
 
 var (
@@ -41,14 +42,14 @@ func runBackupCmd(ctx context.Context, args []string, out, errOut io.Writer, run
 		return errors.New("cannot combine --all with explicit stack names")
 	}
 
-	bundle, err := config.LoadBundle(ctx, *cfgPath)
+	bundle, err := validator.LoadBundle(ctx, *cfgPath)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
 	orch := newOrchestrator(runner)
 	execFn := func() error {
-		if runErr := orch.Backup(ctx, &bundle, &orchestrator.BackupOptions{
+		if runErr := orch.Backup(ctx, bundle, &orchestrator.BackupOptions{
 			Out:    out,
 			Stacks: stacks,
 			NoSync: *noSync,
@@ -62,7 +63,7 @@ func runBackupCmd(ctx context.Context, args []string, out, errOut io.Writer, run
 	if *dryRun {
 		return execFn()
 	}
-	return withExclusiveLock(ctx, bundle.Global.LockFile, errOut, execFn)
+	return withExclusiveLock(ctx, bundle.Config().Global.LockFile, errOut, execFn)
 }
 
 func runSelfBackupCmd(ctx context.Context, args []string, out, errOut io.Writer, runner cmdexec.Runner) error {
@@ -80,14 +81,14 @@ func runSelfBackupCmd(ctx context.Context, args []string, out, errOut io.Writer,
 		return fmt.Errorf("selfbackup does not accept positional arguments: %v", pos)
 	}
 
-	bundle, err := config.LoadBundle(ctx, *cfgPath)
+	bundle, err := validator.LoadBundle(ctx, *cfgPath)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
 	orch := newOrchestrator(runner)
 	execFn := func() error {
-		if selfErr := orch.SelfBackup(ctx, &bundle, &orchestrator.SelfBackupOptions{
+		if selfErr := orch.SelfBackup(ctx, bundle, &orchestrator.SelfBackupOptions{
 			Out:    out,
 			NoSync: *noSync,
 			DryRun: *dryRun,
@@ -100,7 +101,7 @@ func runSelfBackupCmd(ctx context.Context, args []string, out, errOut io.Writer,
 	if *dryRun {
 		return execFn()
 	}
-	return withExclusiveLock(ctx, bundle.Global.LockFile, errOut, execFn)
+	return withExclusiveLock(ctx, bundle.Config().Global.LockFile, errOut, execFn)
 }
 
 func runSyncCmd(ctx context.Context, args []string, out, errOut io.Writer, runner cmdexec.Runner) error {
@@ -121,14 +122,14 @@ func runSyncCmd(ctx context.Context, args []string, out, errOut io.Writer, runne
 		return errors.New("cannot combine --all with explicit stack names")
 	}
 
-	bundle, err := config.LoadBundle(ctx, *cfgPath)
+	bundle, err := validator.LoadBundle(ctx, *cfgPath)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
 	orch := newOrchestrator(runner)
-	return withExclusiveLock(ctx, bundle.Global.LockFile, errOut, func() error {
-		if syncErr := orch.Sync(ctx, &bundle, &orchestrator.SyncOptions{
+	return withExclusiveLock(ctx, bundle.Config().Global.LockFile, errOut, func() error {
+		if syncErr := orch.Sync(ctx, bundle, &orchestrator.SyncOptions{
 			Out:         out,
 			Destination: *destName,
 			Stacks:      stacks,
@@ -163,16 +164,15 @@ func runRestoreCmd(ctx context.Context, args []string, out, errOut io.Writer, ru
 		return archErr
 	}
 
-	bundle, err := config.LoadBundle(ctx, *cfgPath)
+	bundle, err := validator.LoadBundle(ctx, *cfgPath)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
 	orch := newOrchestrator(runner)
 	execFn := func() error {
-		if resErr := orch.Restore(ctx, &bundle.Global, &orchestrator.RestoreOptions{
+		if resErr := orch.Restore(ctx, bundle, &orchestrator.RestoreOptions{
 			Out:                 out,
-			ReverseProxyStack:   bundle.ReverseProxyStack(),
 			ArchivePath:         archivePath,
 			ReverseProxyMode:    *reverseProxyMode,
 			ReverseProxyDomains: splitCSV(*reverseProxyDomains),
@@ -191,7 +191,7 @@ func runRestoreCmd(ctx context.Context, args []string, out, errOut io.Writer, ru
 	if *dryRun {
 		return execFn()
 	}
-	return withExclusiveLock(ctx, bundle.Global.LockFile, errOut, execFn)
+	return withExclusiveLock(ctx, bundle.Config().Global.LockFile, errOut, execFn)
 }
 
 func runDACCmd(ctx context.Context, args []string, out, errOut io.Writer, runner cmdexec.Runner) error {
@@ -208,14 +208,14 @@ func runDACCmd(ctx context.Context, args []string, out, errOut io.Writer, runner
 		return errors.New("dac requires exactly one <stack> argument")
 	}
 
-	bundle, err := config.LoadBundle(ctx, *cfgPath)
+	bundle, err := validator.LoadBundle(ctx, *cfgPath)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
 	orch := newOrchestrator(runner)
 	execFn := func() error {
-		if dacErr := orch.ApplyDAC(ctx, &bundle, &orchestrator.DACOptions{
+		if dacErr := orch.ApplyDAC(ctx, bundle, &orchestrator.DACOptions{
 			Out:    out,
 			Stack:  stacks[0],
 			DryRun: *dryRun,
@@ -228,7 +228,7 @@ func runDACCmd(ctx context.Context, args []string, out, errOut io.Writer, runner
 	if *dryRun {
 		return execFn()
 	}
-	return withExclusiveLock(ctx, bundle.Global.LockFile, errOut, execFn)
+	return withExclusiveLock(ctx, bundle.Config().Global.LockFile, errOut, execFn)
 }
 
 func runVerifyCmd(ctx context.Context, args []string, out, errOut io.Writer) error {
@@ -278,7 +278,7 @@ func resolveVerifyLimits(ctx context.Context, cfgPath string) (archive.Container
 		}
 		targetPath = defaultVerifyConfigPath
 	}
-	global, err := config.LoadGlobal(ctx, targetPath)
+	global, err := validator.LoadGlobal(ctx, targetPath)
 	if err != nil {
 		return archive.ContainerLimits{}, fmt.Errorf("load configuration: %w", err)
 	}
@@ -298,11 +298,12 @@ func runConfigCmd(ctx context.Context, args []string, out, errOut io.Writer) err
 		if err := fs.Parse(args[1:]); err != nil {
 			return fmt.Errorf("parse config validate flags: %w", err)
 		}
-		bundle, err := config.LoadBundle(ctx, *cfgPath)
+		bundle, err := validator.LoadBundle(ctx, *cfgPath)
 		if err != nil {
 			return fmt.Errorf("config validation failed: %w", err)
 		}
-		writeFormatted(out, "configuration valid: %d stack(s), %d destination(s)\n", len(bundle.Stacks), len(bundle.Global.Destinations))
+		rawBundle := bundle.Config()
+		writeFormatted(out, "configuration valid: %d stack(s), %d destination(s)\n", len(rawBundle.Stacks), len(rawBundle.Global.Destinations))
 		return nil
 
 	case "show":
@@ -316,11 +317,11 @@ func runConfigCmd(ctx context.Context, args []string, out, errOut io.Writer) err
 		if len(pos) != 1 {
 			return errors.New("config show requires exactly one <stack> argument")
 		}
-		bundle, err := config.LoadBundle(ctx, *cfgPath)
+		bundle, err := validator.LoadBundle(ctx, *cfgPath)
 		if err != nil {
 			return fmt.Errorf("load configuration: %w", err)
 		}
-		stack, ok := bundle.StackByName(pos[0])
+		stack, ok := bundle.Config().StackByName(pos[0])
 		if !ok {
 			return fmt.Errorf("stack %q not found", pos[0])
 		}

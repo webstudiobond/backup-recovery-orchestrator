@@ -12,6 +12,7 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/archive"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/dac"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/validator"
 )
 
 func TestRestoreValidationAndErrors(t *testing.T) {
@@ -21,11 +22,19 @@ func TestRestoreValidationAndErrors(t *testing.T) {
 	root := t.TempDir()
 	stackName := "app-restore-val"
 	bundle := buildTestBundle(t, root, stackName)
+	validated := mustValidateBundle(t, &bundle)
+	noProxyRaw := bundle
+	noProxyRaw.Global.ReverseProxyStack = ""
+	noProxyStack := bundle.Stacks[0]
+	noProxyStack.ReverseProxy = config.StackReverseProxyConfig{}
+	noProxyRaw.Stacks = []config.StackConfig{noProxyStack}
+	validatedNoProxy := mustValidateBundle(t, &noProxyRaw)
+
 	pPath, gPath := writeFakeAccounts(t, root, stackName)
 	runner := &fakeOrchRunner{snapMount: bundle.Global.LVM.MountPoint, stackName: stackName}
 	orch := newTestOrchestrator(runner, pPath, gPath, nil)
 
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
+	if err := orch.Backup(ctx, validated, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
 		t.Fatalf("Backup failed: %v", err)
 	}
 	archivePath := filepath.Join(bundle.Global.BackupRoot, stackName, stackName+"_2026-11-16_15-00-00.tar")
@@ -35,70 +44,70 @@ func TestRestoreValidationAndErrors(t *testing.T) {
 
 	cases := []struct {
 		ctx     context.Context
-		global  *config.GlobalConfig
+		bundle  *validator.Bundle
 		opts    *RestoreOptions
 		name    string
 		wantErr string
 	}{
 		{
 			ctx:     canceledCtx,
-			global:  &bundle.Global,
+			bundle:  validated,
 			opts:    &RestoreOptions{ArchivePath: archivePath},
 			name:    "canceled context",
 			wantErr: "context canceled before restore",
 		},
 		{
 			ctx:     ctx,
-			global:  nil,
+			bundle:  nil,
 			opts:    &RestoreOptions{ArchivePath: archivePath},
-			name:    "nil global config",
-			wantErr: "global config must not be nil",
+			name:    "nil bundle config",
+			wantErr: "configuration bundle must not be nil",
 		},
 		{
 			ctx:     ctx,
-			global:  &bundle.Global,
+			bundle:  validated,
 			opts:    nil,
 			name:    "nil options",
 			wantErr: "archive path is required for restore",
 		},
 		{
 			ctx:     ctx,
-			global:  &bundle.Global,
+			bundle:  validated,
 			opts:    &RestoreOptions{ArchivePath: "   "},
 			name:    "empty archive path",
 			wantErr: "archive path is required for restore",
 		},
 		{
 			ctx:     ctx,
-			global:  &bundle.Global,
+			bundle:  validated,
 			opts:    &RestoreOptions{ArchivePath: filepath.Join(root, "missing.tar")},
 			name:    "archive verification error",
 			wantErr: "verify archive",
 		},
 		{
 			ctx:     ctx,
-			global:  &bundle.Global,
+			bundle:  validated,
 			opts:    &RestoreOptions{ArchivePath: archivePath, ReverseProxyMode: "invalid-proxy-mode"},
 			name:    "reverse-proxy selection error",
 			wantErr: "unsupported reverse-proxy restore mode",
 		},
 		{
 			ctx:     ctx,
-			global:  &bundle.Global,
+			bundle:  validated,
 			opts:    &RestoreOptions{ArchivePath: archivePath, HostFilesMode: "invalid-host-mode"},
 			name:    "host files selection error",
 			wantErr: "unsupported host-files mode",
 		},
 		{
 			ctx:     ctx,
-			global:  &bundle.Global,
+			bundle:  validated,
 			opts:    &RestoreOptions{ArchivePath: archivePath, OnlySteps: []string{"unknown_step"}},
 			name:    "no steps remaining after filtering",
 			wantErr: "no restore steps selected after filtering",
 		},
 		{
 			ctx:     ctx,
-			global:  &bundle.Global,
+			bundle:  validatedNoProxy,
 			opts:    &RestoreOptions{ArchivePath: archivePath, ReverseProxyMode: RestoreModeAll},
 			name:    "missing reverse_proxy_stack fails fast before restore",
 			wantErr: "global reverse_proxy_stack provider is required to deploy reverse-proxy assets",
@@ -108,14 +117,14 @@ func TestRestoreValidationAndErrors(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := orch.Restore(tc.ctx, tc.global, tc.opts)
+			err := orch.Restore(tc.ctx, tc.bundle, tc.opts)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 			}
 		})
 	}
 
-	if err := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
+	if err := orch.Restore(ctx, validatedNoProxy, &RestoreOptions{
 		ArchivePath:      archivePath,
 		ReverseProxyMode: RestoreModeAll,
 		OnlySteps:        []string{bundle.Stacks[0].RestoreSteps[0].Action},
@@ -130,18 +139,19 @@ func TestRestoreUserAndMkdirTempErrors(t *testing.T) {
 	root := t.TempDir()
 	stackName := "app-restore-env"
 	bundle := buildTestBundle(t, root, stackName)
+	validated := mustValidateBundle(t, &bundle)
 	pPath, gPath := writeFakeAccounts(t, root, stackName)
 	runner := &fakeOrchRunner{snapMount: bundle.Global.LVM.MountPoint, stackName: stackName}
 	orch := newTestOrchestrator(runner, pPath, gPath, nil)
 
-	if err := orch.Backup(context.Background(), &bundle, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
+	if err := orch.Backup(context.Background(), validated, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
 		t.Fatalf("Backup failed: %v", err)
 	}
 	archivePath := filepath.Join(bundle.Global.BackupRoot, stackName, stackName+"_2026-11-16_15-00-00.tar")
 
 	origRootMkdir := rootMkdir
 	rootMkdir = mockFailingRootMkdir
-	err := orch.Restore(context.Background(), &bundle.Global, &RestoreOptions{
+	err := orch.Restore(context.Background(), validated, &RestoreOptions{
 		ArchivePath: archivePath,
 	})
 	rootMkdir = origRootMkdir
@@ -151,7 +161,7 @@ func TestRestoreUserAndMkdirTempErrors(t *testing.T) {
 
 	failOrch := newTestOrchestrator(&fakeOrchRunner{failMatch: "useradd"}, pPath, gPath, nil)
 	failOrch.SysUser.PasswdPath = filepath.Join(root, "nonexistent-passwd")
-	errUser := failOrch.Restore(context.Background(), &bundle.Global, &RestoreOptions{
+	errUser := failOrch.Restore(context.Background(), validated, &RestoreOptions{
 		ArchivePath: archivePath,
 		DryRun:      true,
 	})
@@ -167,6 +177,7 @@ func TestRestoreDryRunAndSuccess(t *testing.T) {
 	root := t.TempDir()
 	stackName := "app-restore-run"
 	bundle := buildTestBundle(t, root, stackName)
+	validated := mustValidateBundle(t, &bundle)
 	pPath, gPath := writeFakeAccounts(t, root, stackName)
 	runner := &fakeOrchRunner{
 		snapMount: bundle.Global.LVM.MountPoint,
@@ -175,13 +186,13 @@ func TestRestoreDryRunAndSuccess(t *testing.T) {
 	}
 	orch := newTestOrchestrator(runner, pPath, gPath, nil)
 
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
+	if err := orch.Backup(ctx, validated, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
 		t.Fatalf("Backup failed: %v", err)
 	}
 	archivePath := filepath.Join(bundle.Global.BackupRoot, stackName, stackName+"_2026-11-16_15-00-00.tar")
 
 	var dryBuf bytes.Buffer
-	dryErr := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
+	dryErr := orch.Restore(ctx, validated, &RestoreOptions{
 		ArchivePath: archivePath,
 		DryRun:      true,
 		Out:         &dryBuf,
@@ -194,11 +205,10 @@ func TestRestoreDryRunAndSuccess(t *testing.T) {
 	}
 
 	var runBuf bytes.Buffer
-	runErr := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
-		ArchivePath:       archivePath,
-		ReverseProxyStack: bundle.ReverseProxyStack(),
-		ReverseProxyMode:  RestoreModeAll,
-		Out:               &runBuf,
+	runErr := orch.Restore(ctx, validated, &RestoreOptions{
+		ArchivePath:      archivePath,
+		ReverseProxyMode: RestoreModeAll,
+		Out:              &runBuf,
 	})
 	if runErr != nil {
 		t.Fatalf("expected restore success, got %v", runErr)
@@ -236,7 +246,7 @@ func TestRunRestoreSequenceAndErrors(t *testing.T) {
 		t.Fatalf("expected unpack container error, got %v", unpackErr)
 	}
 
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
+	if err := orch.Backup(ctx, mustValidateBundle(t, &bundle), &BackupOptions{NoSync: true, Out: io.Discard}); err != nil {
 		t.Fatalf("Backup failed: %v", err)
 	}
 	archivePath := filepath.Join(bundle.Global.BackupRoot, stackName, stackName+"_2026-11-16_15-00-00.tar")

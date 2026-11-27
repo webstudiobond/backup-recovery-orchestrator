@@ -14,7 +14,6 @@ import (
 
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/cmdexec"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
-	"github.com/webstudiobond/backup-recovery-orchestrator/internal/reverseproxy"
 )
 
 type recordedTarCall struct {
@@ -117,7 +116,7 @@ func prepareReverseProxyFixtures(t *testing.T, root string) (config.StackConfig,
 		Name:     "reverse-proxy-host",
 		StackDir: reverseProxyStackDir,
 		ReverseProxyProvider: &config.ReverseProxyProviderConfig{
-			Type:        reverseproxy.TypeAngie,
+			Type:        "angie",
 			ServiceName: "edge-proxy",
 			DomainsDir:  "data/conf.d/domains",
 			StreamDir:   "data/conf.d/stream",

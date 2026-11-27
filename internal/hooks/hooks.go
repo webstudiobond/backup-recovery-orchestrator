@@ -16,7 +16,14 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/docker"
 )
 
-const defaultWaitPollInterval = 250 * time.Millisecond
+const (
+	defaultWaitPollInterval = 250 * time.Millisecond
+	hookActionRemovePath    = "remove_path"
+	hookActionWaitForFile   = "wait_for_file"
+	hookActionComposeKill   = "compose_kill"
+	hookActionComposeExec   = "compose_exec"
+	hookActionComposeRun    = "compose_run"
+)
 
 var (
 	filepathAbs   = filepath.Abs
@@ -64,21 +71,21 @@ func (r *Runner) RunPhase(ctx context.Context, phase, stackDir, composeFile stri
 
 func (r *Runner) runStep(ctx context.Context, stackDir, composeFile string, step *config.HookStep) error {
 	switch step.Action {
-	case "remove_path":
+	case hookActionRemovePath:
 		return removePathWithinStack(stackDir, step.Path)
-	case "compose_kill":
+	case hookActionComposeKill:
 		if err := r.Docker.Kill(ctx, composeFile, step.Service, step.Signal); err != nil {
 			return fmt.Errorf("compose kill: %w", err)
 		}
 		return nil
-	case "wait_for_file":
+	case hookActionWaitForFile:
 		return r.waitForFile(ctx, step.Path, time.Duration(step.TimeoutSec)*time.Second)
-	case "compose_exec":
+	case hookActionComposeExec:
 		if err := r.Docker.Exec(ctx, composeFile, step.Service, nil, step.Command, nil, nil); err != nil {
 			return fmt.Errorf("compose exec: %w", err)
 		}
 		return nil
-	case "compose_run":
+	case hookActionComposeRun:
 		if err := r.Docker.Run(ctx, composeFile, step.Service, nil, step.Command, nil, nil); err != nil {
 			return fmt.Errorf("compose run: %w", err)
 		}

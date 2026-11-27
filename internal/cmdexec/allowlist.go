@@ -5,32 +5,49 @@ import (
 	"os/exec"
 )
 
+// Allowlisted external executable names permitted for host command execution.
+const (
+	BinDocker     = "docker"
+	BinTar        = "tar"
+	BinZstd       = "zstd"
+	BinLVCreate   = "lvcreate"
+	BinLVRemove   = "lvremove"
+	BinLVS        = "lvs"
+	BinMount      = "mount"
+	BinUmount     = "umount"
+	BinMountpoint = "mountpoint"
+	BinSystemctl  = "systemctl"
+	BinRclone     = "rclone"
+	BinGroupadd   = "groupadd"
+	BinUseradd    = "useradd"
+)
+
 var allowedCommands = map[string]func(context.Context) *exec.Cmd{
-	"docker":     cmdDocker,
-	"tar":        cmdTar,
-	"zstd":       cmdZstd,
-	"lvcreate":   cmdLvcreate,
-	"lvremove":   cmdLvremove,
-	"lvs":        cmdLvs,
-	"mount":      cmdMount,
-	"umount":     cmdUmount,
-	"mountpoint": cmdMountpoint,
-	"systemctl":  cmdSystemctl,
-	"rclone":     cmdRclone,
-	"groupadd":   cmdGroupadd,
-	"useradd":    cmdUseradd,
+	BinDocker:     cmdDocker,
+	BinTar:        cmdTar,
+	BinZstd:       cmdZstd,
+	BinLVCreate:   cmdLvcreate,
+	BinLVRemove:   cmdLvremove,
+	BinLVS:        cmdLvs,
+	BinMount:      cmdMount,
+	BinUmount:     cmdUmount,
+	BinMountpoint: cmdMountpoint,
+	BinSystemctl:  cmdSystemctl,
+	BinRclone:     cmdRclone,
+	BinGroupadd:   cmdGroupadd,
+	BinUseradd:    cmdUseradd,
 }
 
-func cmdDocker(ctx context.Context) *exec.Cmd     { return exec.CommandContext(ctx, "docker") }
-func cmdTar(ctx context.Context) *exec.Cmd        { return exec.CommandContext(ctx, "tar") }
-func cmdZstd(ctx context.Context) *exec.Cmd       { return exec.CommandContext(ctx, "zstd") }
-func cmdLvcreate(ctx context.Context) *exec.Cmd   { return exec.CommandContext(ctx, "lvcreate") }
-func cmdLvremove(ctx context.Context) *exec.Cmd   { return exec.CommandContext(ctx, "lvremove") }
-func cmdLvs(ctx context.Context) *exec.Cmd        { return exec.CommandContext(ctx, "lvs") }
-func cmdMount(ctx context.Context) *exec.Cmd      { return exec.CommandContext(ctx, "mount") }
-func cmdUmount(ctx context.Context) *exec.Cmd     { return exec.CommandContext(ctx, "umount") }
-func cmdMountpoint(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "mountpoint") }
-func cmdSystemctl(ctx context.Context) *exec.Cmd  { return exec.CommandContext(ctx, "systemctl") }
-func cmdRclone(ctx context.Context) *exec.Cmd     { return exec.CommandContext(ctx, "rclone") }
-func cmdGroupadd(ctx context.Context) *exec.Cmd   { return exec.CommandContext(ctx, "groupadd") }
-func cmdUseradd(ctx context.Context) *exec.Cmd    { return exec.CommandContext(ctx, "useradd") }
+func cmdDocker(ctx context.Context) *exec.Cmd     { return exec.CommandContext(ctx, BinDocker) }
+func cmdTar(ctx context.Context) *exec.Cmd        { return exec.CommandContext(ctx, BinTar) }
+func cmdZstd(ctx context.Context) *exec.Cmd       { return exec.CommandContext(ctx, BinZstd) }
+func cmdLvcreate(ctx context.Context) *exec.Cmd   { return exec.CommandContext(ctx, BinLVCreate) }
+func cmdLvremove(ctx context.Context) *exec.Cmd   { return exec.CommandContext(ctx, BinLVRemove) }
+func cmdLvs(ctx context.Context) *exec.Cmd        { return exec.CommandContext(ctx, BinLVS) }
+func cmdMount(ctx context.Context) *exec.Cmd      { return exec.CommandContext(ctx, BinMount) }
+func cmdUmount(ctx context.Context) *exec.Cmd     { return exec.CommandContext(ctx, BinUmount) }
+func cmdMountpoint(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, BinMountpoint) }
+func cmdSystemctl(ctx context.Context) *exec.Cmd  { return exec.CommandContext(ctx, BinSystemctl) }
+func cmdRclone(ctx context.Context) *exec.Cmd     { return exec.CommandContext(ctx, BinRclone) }
+func cmdGroupadd(ctx context.Context) *exec.Cmd   { return exec.CommandContext(ctx, BinGroupadd) }
+func cmdUseradd(ctx context.Context) *exec.Cmd    { return exec.CommandContext(ctx, BinUseradd) }

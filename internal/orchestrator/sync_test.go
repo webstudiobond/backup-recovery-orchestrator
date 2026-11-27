@@ -20,10 +20,11 @@ func TestSyncValidationAndContextErrors(t *testing.T) {
 	pPath, gPath := writeFakeAccounts(t, root, "app-sync-val")
 	orch := newTestOrchestrator(&fakeOrchRunner{}, pPath, gPath, nil)
 	bundle := buildTestBundle(t, root, "app-sync-val")
+	validated := mustValidateBundle(t, &bundle)
 
 	canceledCtx, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := orch.Sync(canceledCtx, &bundle, nil); err == nil || !strings.Contains(err.Error(), "context canceled before sync") {
+	if err := orch.Sync(canceledCtx, validated, nil); err == nil || !strings.Contains(err.Error(), "context canceled before sync") {
 		t.Fatalf("expected canceled context error, got %v", err)
 	}
 
@@ -31,17 +32,17 @@ func TestSyncValidationAndContextErrors(t *testing.T) {
 		t.Fatalf("expected nil bundle error, got %v", err)
 	}
 
-	if err := orch.Sync(ctx, &bundle, &SyncOptions{Stacks: []string{"unknown-stack"}}); err == nil || !strings.Contains(err.Error(), "not found in configuration") {
+	if err := orch.Sync(ctx, validated, &SyncOptions{Stacks: []string{"unknown-stack"}}); err == nil || !strings.Contains(err.Error(), "not found in configuration") {
 		t.Fatalf("expected unknown stack error, got %v", err)
 	}
 
-	if err := orch.Sync(ctx, &bundle, &SyncOptions{Destination: "unknown-dest"}); err == nil || !strings.Contains(err.Error(), "destination \"unknown-dest\" not found") {
+	if err := orch.Sync(ctx, validated, &SyncOptions{Destination: "unknown-dest"}); err == nil || !strings.Contains(err.Error(), "destination \"unknown-dest\" not found") {
 		t.Fatalf("expected unknown destination error, got %v", err)
 	}
 
 	emptyDestsBundle := bundle
 	emptyDestsBundle.Global.Destinations = nil
-	if err := orch.Sync(ctx, &emptyDestsBundle, nil); err == nil || !strings.Contains(err.Error(), "no offsite destinations configured") {
+	if err := orch.Sync(ctx, mustValidateBundle(t, &emptyDestsBundle), nil); err == nil || !strings.Contains(err.Error(), "no offsite destinations configured") {
 		t.Fatalf("expected empty destination list error, got %v", err)
 	}
 }
@@ -72,8 +73,9 @@ func TestSyncLoopCancellationAndSuccess(t *testing.T) {
 		t.Fatalf("write self tar: %v", err)
 	}
 
+	validated := mustValidateBundle(t, &bundle)
 	var buf bytes.Buffer
-	if err := orch.Sync(context.Background(), &bundle, &SyncOptions{Out: &buf}); err != nil {
+	if err := orch.Sync(context.Background(), validated, &SyncOptions{Out: &buf}); err != nil {
 		t.Fatalf("expected sync success with nil stacks, got %v", err)
 	}
 	outStr := buf.String()
@@ -81,7 +83,7 @@ func TestSyncLoopCancellationAndSuccess(t *testing.T) {
 		t.Fatalf("expected sync log in output, got:\n%s", outStr)
 	}
 
-	if err := orch.Sync(context.Background(), &bundle, nil); err != nil {
+	if err := orch.Sync(context.Background(), validated, nil); err != nil {
 		t.Fatalf("expected sync success with nil opts, got %v", err)
 	}
 
@@ -102,7 +104,7 @@ func TestSyncLoopCancellationAndSuccess(t *testing.T) {
 		return 0x65735546, nil
 	}
 	cancelOrch := newTestOrchestrator(&fakeOrchRunner{}, pPath, gPath, cancelStatFn)
-	if err := cancelOrch.Sync(loopCtx, &twoDestsBundle, &SyncOptions{
+	if err := cancelOrch.Sync(loopCtx, mustValidateBundle(t, &twoDestsBundle), &SyncOptions{
 		Stacks: []string{stackName},
 	}); err != nil {
 		t.Logf("cancelOrch.Sync result: %v", err)

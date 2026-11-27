@@ -43,7 +43,7 @@ func TestBackupPipelineDryRunAndEndToEnd(t *testing.T) {
 	orch := newTestOrchestrator(runner, pPath, gPath, nil)
 
 	var dryBuf bytes.Buffer
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{DryRun: true, Out: &dryBuf}); err != nil {
+	if err := orch.Backup(ctx, mustValidateBundle(t, &bundle), &BackupOptions{DryRun: true, Out: &dryBuf}); err != nil {
 		t.Fatalf("dry-run backup failed: %v", err)
 	}
 	if !strings.Contains(dryBuf.String(), "cloud-primary(fuse:keep=5)") {
@@ -51,7 +51,7 @@ func TestBackupPipelineDryRunAndEndToEnd(t *testing.T) {
 	}
 
 	var runBuf bytes.Buffer
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{Out: &runBuf}); err != nil {
+	if err := orch.Backup(ctx, mustValidateBundle(t, &bundle), &BackupOptions{Out: &runBuf}); err != nil {
 		t.Fatalf("Backup failed: %v", err)
 	}
 
@@ -71,13 +71,12 @@ func TestBackupPipelineDryRunAndEndToEnd(t *testing.T) {
 	assertBashContainerLayout(ctx, t, localArchive, stackName)
 
 	var restoreDryBuf bytes.Buffer
-	if err := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
-		ArchivePath:       remoteArchive,
-		ReverseProxyStack: bundle.ReverseProxyStack(),
-		ReverseProxyMode:  RestoreModeAll,
-		HostFilesMode:     RestoreModeAll,
-		DryRun:            true,
-		Out:               &restoreDryBuf,
+	if err := orch.Restore(ctx, mustValidateBundle(t, &bundle), &RestoreOptions{
+		ArchivePath:      remoteArchive,
+		ReverseProxyMode: RestoreModeAll,
+		HostFilesMode:    RestoreModeAll,
+		DryRun:           true,
+		Out:              &restoreDryBuf,
 	}); err != nil {
 		t.Fatalf("Restore dry-run failed: %v", err)
 	}
@@ -89,11 +88,10 @@ func TestBackupPipelineDryRunAndEndToEnd(t *testing.T) {
 	}
 
 	var restoreBuf bytes.Buffer
-	if err := orch.Restore(ctx, &bundle.Global, &RestoreOptions{
-		ArchivePath:       remoteArchive,
-		ReverseProxyStack: bundle.ReverseProxyStack(),
-		ReverseProxyMode:  RestoreModeAll,
-		Out:               &restoreBuf,
+	if err := orch.Restore(ctx, mustValidateBundle(t, &bundle), &RestoreOptions{
+		ArchivePath:      remoteArchive,
+		ReverseProxyMode: RestoreModeAll,
+		Out:              &restoreBuf,
 	}); err != nil {
 		t.Fatalf("Restore failed: %v", err)
 	}
@@ -142,7 +140,7 @@ func TestBackupSkipsFailingDestinationAndContinues(t *testing.T) {
 	runner.failMatch = "mountpoint -q " + brokenMount
 
 	var outBuf bytes.Buffer
-	err := orch.Backup(ctx, &bundle, &BackupOptions{Out: &outBuf})
+	err := orch.Backup(ctx, mustValidateBundle(t, &bundle), &BackupOptions{Out: &outBuf})
 	if err == nil || !strings.Contains(err.Error(), "broken-cloud") {
 		t.Fatalf("expected error mentioning broken-cloud, got %v", err)
 	}
@@ -197,7 +195,7 @@ func TestBackupTimezoneModes(t *testing.T) {
 			orch := newTestOrchestrator(runner, pPath, gPath, nil)
 			orch.Now = func() time.Time { return fixedNow }
 
-			if err := orch.Backup(ctx, &bundle, &BackupOptions{Out: io.Discard}); err != nil {
+			if err := orch.Backup(ctx, mustValidateBundle(t, &bundle), &BackupOptions{Out: io.Discard}); err != nil {
 				t.Fatalf("Backup failed: %v", err)
 			}
 
@@ -240,9 +238,10 @@ func TestBackupOptionsAndValidation(t *testing.T) {
 	}
 	orch := newTestOrchestrator(runner, pPath, gPath, nil)
 
+	validated := mustValidateBundle(t, &bundle)
 	canceledCtx, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := orch.Backup(canceledCtx, &bundle, nil); err == nil || !strings.Contains(err.Error(), "context canceled before backup") {
+	if err := orch.Backup(canceledCtx, validated, nil); err == nil || !strings.Contains(err.Error(), "context canceled before backup") {
 		t.Fatalf("expected context canceled error, got %v", err)
 	}
 
@@ -250,7 +249,21 @@ func TestBackupOptionsAndValidation(t *testing.T) {
 		t.Fatal("expected error on nil bundle")
 	}
 
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{DryRun: true, Stacks: []string{stackName}, Out: io.Discard}); err != nil {
+	if err := orch.Backup(ctx, validated, &BackupOptions{Stacks: []string{"unknown-stack"}, Out: io.Discard}); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected unknown stack error, got %v", err)
+	}
+
+	badRootFile := filepath.Join(root, "backup_root_is_file")
+	if err := os.WriteFile(badRootFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write bad root file: %v", err)
+	}
+	badRootBundle := bundle
+	badRootBundle.Global.BackupRoot = badRootFile
+	if err := orch.Backup(ctx, mustValidateBundle(t, &badRootBundle), nil); err == nil || !strings.Contains(err.Error(), "prepare backup work directory") {
+		t.Fatalf("expected prepare backup work directory error on nil opts, got %v", err)
+	}
+
+	if err := orch.Backup(ctx, validated, &BackupOptions{DryRun: true, Stacks: []string{stackName}, Out: io.Discard}); err != nil {
 		t.Fatalf("dry-run with explicit stack failed: %v", err)
 	}
 
@@ -259,7 +272,7 @@ func TestBackupOptionsAndValidation(t *testing.T) {
 	if err := os.WriteFile(orch.SystemdDir, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	if err := orch.Backup(ctx, &bundle, &BackupOptions{DryRun: true, Out: io.Discard}); err == nil {
+	if err := orch.Backup(ctx, validated, &BackupOptions{DryRun: true, Out: io.Discard}); err == nil {
 		t.Fatal("expected error in dry run self backup")
 	}
 	orch.SystemdDir = origSystemd
@@ -271,7 +284,7 @@ func TestBackupOptionsAndValidation(t *testing.T) {
 		breakCancel()
 		return 0, errors.New("check space error")
 	}
-	if err := orch.Backup(breakCtx, &bundle, &BackupOptions{Out: io.Discard}); err == nil {
+	if err := orch.Backup(breakCtx, validated, &BackupOptions{Out: io.Discard}); err == nil {
 		t.Fatal("expected error with canceled context")
 	}
 	if callCount != 1 {

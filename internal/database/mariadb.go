@@ -7,6 +7,8 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 )
 
+const driverMariaDB = "mariadb"
+
 const mariaDumpContainerScript = `if [ -n "$1" ]; then u="$(cat "$1")"; else u="$2"; fi
 if [ -n "$3" ]; then d="$(cat "$3")"; else d="$4"; fi
 if [ -n "$5" ]; then p="$(cat "$5")"; export MYSQL_PWD="$p"; fi

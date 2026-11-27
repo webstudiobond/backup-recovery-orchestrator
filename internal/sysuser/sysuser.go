@@ -124,14 +124,14 @@ func (m *Manager) provisionAccount(ctx context.Context, target config.UserConfig
 	uidStr := strconv.FormatUint(uint64(target.UID), 10)
 
 	if err := m.Runner.Run(ctx, &cmdexec.Spec{
-		Name: "groupadd",
+		Name: cmdexec.BinGroupadd,
 		Args: []string{"-g", gidStr, target.Name},
 	}); err != nil {
 		return "", fmt.Errorf("create group %q (%s): %w", target.Name, gidStr, err)
 	}
 
 	if err := m.Runner.Run(ctx, &cmdexec.Spec{
-		Name: "useradd",
+		Name: cmdexec.BinUseradd,
 		Args: []string{"-u", uidStr, "-g", gidStr, "-M", "-d", homeDir, "-s", "/usr/sbin/nologin", target.Name},
 	}); err != nil {
 		return "", fmt.Errorf("create user %q (%s:%s): %w", target.Name, uidStr, gidStr, err)

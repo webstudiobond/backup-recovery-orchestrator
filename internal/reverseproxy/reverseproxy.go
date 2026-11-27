@@ -24,7 +24,7 @@ type Provider interface {
 }
 
 var providers = map[string]Provider{
-	TypeAngie: angieProvider{},
+	typeAngie: angieProvider{},
 }
 
 // Lookup returns the registered reverse-proxy provider for reverseProxyType or an error if unsupported.

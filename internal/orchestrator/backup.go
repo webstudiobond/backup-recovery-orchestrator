@@ -13,6 +13,7 @@ import (
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/archive"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/config"
 	"github.com/webstudiobond/backup-recovery-orchestrator/internal/storage"
+	"github.com/webstudiobond/backup-recovery-orchestrator/internal/validator"
 )
 
 // BackupOptions controls target selection, offsite sync skipping, and dry-run planning for Backup.
@@ -24,22 +25,26 @@ type BackupOptions struct {
 }
 
 // Backup runs the sequential backup -> sync -> local_prune pipeline across selected stacks, continuing past isolated errors.
-func (o *Orchestrator) Backup(ctx context.Context, bundle *config.Bundle, opts *BackupOptions) error {
+func (o *Orchestrator) Backup(ctx context.Context, bundle *validator.Bundle, opts *BackupOptions) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context canceled before backup: %w", err)
+	}
+	if bundle == nil {
+		return errors.New("configuration bundle must not be nil")
 	}
 	if opts == nil {
 		opts = &BackupOptions{}
 	}
 	out := resolveWriter(opts.Out)
+	rawBundle := bundle.Config()
 
-	targets, err := selectStacks(bundle, opts.Stacks)
+	targets, err := selectStacks(rawBundle, opts.Stacks)
 	if err != nil {
 		return err
 	}
 
 	if opts.DryRun {
-		printBackupDryRun(out, bundle, targets, opts.NoSync)
+		printBackupDryRun(out, rawBundle, targets, opts.NoSync)
 		if len(opts.Stacks) == 0 {
 			return o.SelfBackup(ctx, bundle, &SelfBackupOptions{
 				Out:    out,
@@ -50,14 +55,14 @@ func (o *Orchestrator) Backup(ctx context.Context, bundle *config.Bundle, opts *
 		return nil
 	}
 
-	if err := pruneStaleWorkDirs(backupWorkDir(bundle.Global.BackupRoot)); err != nil {
+	if err := pruneStaleWorkDirs(backupWorkDir(rawBundle.Global.BackupRoot)); err != nil {
 		return fmt.Errorf("prepare backup work directory: %w", err)
 	}
 
-	reverseProxyStack := bundle.ReverseProxyStack()
+	reverseProxyStack := rawBundle.ReverseProxyStack()
 	var stackErrs []error
 	for i := range targets {
-		if stackErr := o.backupSingleStack(ctx, out, &bundle.Global, reverseProxyStack, &targets[i], opts.NoSync); stackErr != nil {
+		if stackErr := o.backupSingleStack(ctx, out, &rawBundle.Global, reverseProxyStack, &targets[i], opts.NoSync); stackErr != nil {
 			wrapped := fmt.Errorf("backup stack %q: %w", targets[i].Name, stackErr)
 			writeLine(out, fmt.Sprintf("[backup-error] stack=%s err=%v", targets[i].Name, stackErr))
 			stackErrs = append(stackErrs, wrapped)
@@ -276,7 +281,7 @@ func formatStackDestinations(all []config.DestinationConfig, stack *config.Stack
 func resolveBackupTime(base time.Time, tz string) (t time.Time, stamp string) {
 	if tz == config.TimezoneUTC {
 		utc := base.UTC()
-		return utc, utc.Format(archiveTimestampLayout) + "_UTC"
+		return utc, utc.Format(config.ArchiveTimestampLayout) + "_UTC"
 	}
-	return base, base.Format(archiveTimestampLayout)
+	return base, base.Format(config.ArchiveTimestampLayout)
 }
